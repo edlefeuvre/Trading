@@ -1,0 +1,19 @@
+// TS01 CHoCH ICT 15m Binance USDCp — alert indicator · TS01 v1.0
+// Governed by strategies/TS01_CHoCH_ICT_15m_Binance_USDCp/STRATEGY.md. Parameters below
+// mirror config/params.yaml §3; if they differ, the yaml is right and this is wrong.
+// Alerts are for eyes and the journal. The runner detects independently.
+//@version=6
+indicator("TS01 CHoCH alerts", overlay=true, max_labels_count=200)
+
+// --- parameters (mirror of params.yaml) ------------------------------------
+gapWindowBars = input.int(2,  "Gap window (bars after CHoCH)",  minval=1)   // entry.gap_window_bars
+gtcWindowBars = input.int(32, "GTC window (bars from gap bar)", minval=1)   // entry.gtc_window_bars
+pivotK        = input.int(3,  "Fractal pivot width k",          minval=2)   // TO CONFIRM against engine
+
+// --- TODO: migrate the existing TradingView script logic here ---------------
+// Required behaviour (STRATEGY.md §2): sweep of prior swing → CHoCH confirmed on
+// bar CLOSE → gap bar within gapWindowBars → alert once, on bar close, carrying
+// symbol, side, entry level, stop level, pool level and the gap-bar timestamp.
+// Alert text format: "TS01 SETUP {side} {symbol} entry={e} stop={s} pool={p} gapbar={t}"
+
+plot(na)

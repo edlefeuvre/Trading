@@ -1,0 +1,26 @@
+[Unit]
+Description=TS01 CHoCH ICT 15m Binance USDCp — runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory={{REPO}}
+EnvironmentFile=/etc/trading/TS01.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{REPO}}/.venv/bin/python -m strategies.TS01_CHoCH_ICT_15m_Binance_USDCp.py.runner
+Restart=on-failure
+RestartSec=15
+# hard stop: if the runner keeps dying, don't flap forever
+StartLimitIntervalSec=600
+StartLimitBurst=5
+SyslogIdentifier=TS01
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{REPO}}/strategies/TS01_CHoCH_ICT_15m_Binance_USDCp/logs {{REPO}}/strategies/TS01_CHoCH_ICT_15m_Binance_USDCp/results {{REPO}}/common/data/cache
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

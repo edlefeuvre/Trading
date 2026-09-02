@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# new-strategy — scaffold strategies/TS<NN>_<Name>_<Platform>_<Universe>/
+# Usage: bin/new-strategy 02 FundingFade Binance USDCp
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+if [ $# -ne 5 ]; then
+  echo "usage: $0 <NN> <Name> <TF> <Platform> <Universe>   e.g. 02 Funding_Fade 1H Binance USDCp" >&2
+  exit 2
+fi
+NN=$1 NAME=$2 TF=$3 PLATFORM=$4 UNIVERSE=$5
+[[ "$NN" =~ ^[0-9]{2}$ ]] || { echo "NN must be two digits" >&2; exit 2; }
+[[ "$TF" =~ ^[0-9]+(m|H|D|W)$ ]] || { echo "TF must look like 15m, 1H, 4H, 1D" >&2; exit 2; }
+SLUG="TS${NN}_${NAME}_${TF}_${PLATFORM}_${UNIVERSE}"
+DIR="$ROOT/strategies/$SLUG"
+[ -e "$DIR" ] && { echo "$DIR already exists" >&2; exit 1; }
+if ls -d "$ROOT"/strategies/TS"$NN"_* >/dev/null 2>&1; then
+  echo "TS$NN is already taken — numbers are never reused" >&2; exit 1
+fi
+
+# spoken universe: USDCp -> USDC.p, USDTp -> USDT.p, otherwise unchanged
+SPOKEN="$UNIVERSE"
+NAME_SPOKEN=${NAME//_/ }
+DATE=$(date +%F)
+
+mkdir -p "$DIR"/{config,pine,src/tests,systemd,results/acceptance,logs}
+touch "$DIR"/logs/.gitkeep "$DIR"/results/acceptance/.gitkeep "$DIR"/pine/.gitkeep
+
+render() {  # render <template> <dest>
+  sed -e "s/{{NN}}/$NN/g" -e "s/{{NAME}}/$NAME/g" -e "s/{{PLATFORM}}/$PLATFORM/g" \
+      -e "s/{{UNIVERSE}}/$UNIVERSE/g" -e "s/{{TF}}/$TF/g" -e "s/{{UNIVERSE_SPOKEN}}/$SPOKEN/g" -e "s/{{NAME_SPOKEN}}/$NAME_SPOKEN/g" \
+      -e "s/{{SLUG}}/$SLUG/g" -e "s/{{DATE}}/$DATE/g" "$1" > "$2"
+}
+
+render "$ROOT/templates/STRATEGY.md"        "$DIR/STRATEGY.md"
+render "$ROOT/templates/params.yaml"        "$DIR/config/params.yaml"
+render "$ROOT/templates/universe.yaml"      "$DIR/config/universe.yaml"
+render "$ROOT/templates/runner.service"     "$DIR/systemd/TS${NN}-runner.service"
+render "$ROOT/templates/weekly.service"     "$DIR/systemd/TS${NN}-weekly.service"
+render "$ROOT/templates/weekly.timer"       "$DIR/systemd/TS${NN}-weekly.timer"
+render "$ROOT/templates/runner.py"          "$DIR/src/runner.py"
+render "$ROOT/templates/backtest.py"        "$DIR/src/backtest.py"
+render "$ROOT/templates/weekly.py"          "$DIR/src/weekly.py"
+render "$ROOT/templates/test_replay.py"     "$DIR/src/tests/test_replay.py"
+: > "$DIR/src/__init__.py"; : > "$DIR/__init__.py"
+
+echo "created strategies/$SLUG"
+echo "next: fill STRATEGY.md §1–§4, then: make check && git add strategies/$SLUG"

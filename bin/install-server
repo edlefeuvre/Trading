@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# install-server — one-time host setup (Linux/WSL variant; Windows uses deploy\windows\*.ps1).
+# Run once as a sudoer: bin/install-server
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+echo "== user"
+id trader >/dev/null 2>&1 || sudo useradd --system --create-home --shell /usr/sbin/nologin trader
+
+echo "== secrets dir"
+sudo mkdir -p /etc/trading
+sudo chown root:trader /etc/trading
+sudo chmod 750 /etc/trading
+for d in "$ROOT"/strategies/TS*/; do
+  ts=$(basename "$d" | cut -d_ -f1)
+  f=/etc/trading/$ts.env
+  if [ ! -f "$f" ]; then
+    sudo tee "$f" >/dev/null <<ENV
+# $ts — trade-only key, withdrawals disabled, IP-allowlisted. chmod 600.
+BINANCE_KEY=
+BINANCE_SECRET=
+TELEGRAM_TOKEN=
+TELEGRAM_CHAT_ID=
+LOG_LEVEL=INFO
+ENV
+    sudo chown trader:trader "$f"; sudo chmod 600 "$f"
+    echo "   created $f — fill it in"
+  fi
+done
+
+echo "== python venv"
+if [ ! -d "$ROOT/.venv" ]; then
+  python3 -m venv "$ROOT/.venv"
+fi
+"$ROOT/.venv/bin/pip" install -q --upgrade pip
+"$ROOT/.venv/bin/pip" install -q -r "$ROOT/requirements.txt"
+
+echo "== permissions"
+sudo chown -R trader:trader "$ROOT"/strategies/TS*/logs "$ROOT"/strategies/TS*/results 2>/dev/null || true
+mkdir -p "$ROOT/common/data/cache"; sudo chown -R trader:trader "$ROOT/common/data/cache"
+
+echo "== git hooks"
+(cd "$ROOT" && git config core.hooksPath .githooks) || echo "   (not a git repo yet — run: git init && make hooks)"
+
+echo "== done. next: make check && make install TS=01"

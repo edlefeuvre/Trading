@@ -1,0 +1,11 @@
+[Unit]
+Description=TS{{NN}} — Sunday programme: roll data, re-run engine, R factors for review
+
+[Service]
+Type=oneshot
+User=trader
+Group=trader
+WorkingDirectory={{REPO}}
+EnvironmentFile=/etc/trading/TS{{NN}}.env
+ExecStart={{REPO}}/.venv/bin/python -m strategies.{{SLUG}}.src.weekly
+SyslogIdentifier=TS{{NN}}-weekly

@@ -1,0 +1,29 @@
+# TS01 — the 21 Binance USDC.p symbols (the SYMBOLS list of choch_sizes.py).
+# tier = multiplier of the charter ceiling: 1.0 full, 0.5 half, 0 not traded and not scanned.
+# Tiers are PROPOSED by the Sunday programme and APPLIED by Ed (change-log row). Sizing
+# down is permitted; up is not. Adding a symbol is MAJOR. Source: sizes.json 31 Aug 2026.
+platform: Binance
+product: USDCp
+dataset_start: 2024-01
+symbols:
+  - {symbol: SOLUSDC,      tier: 1.0, why: positive both}
+  - {symbol: UNIUSDC,      tier: 1.0, why: positive both}
+  - {symbol: LTCUSDC,      tier: 0.5, why: positive one}
+  - {symbol: BTCUSDC,      tier: 0.5, why: positive one}
+  - {symbol: WLDUSDC,      tier: 0.5, why: positive one}
+  - {symbol: XRPUSDC,      tier: 0.5, why: positive one}
+  - {symbol: LINKUSDC,     tier: 0.5, why: positive one}
+  - {symbol: DOGEUSDC,     tier: 0.5, why: positive one}
+  - {symbol: ETHUSDC,      tier: 0.5, why: positive one}
+  - {symbol: ADAUSDC,      tier: 0.5, why: positive one}
+  - {symbol: ORDIUSDC,     tier: 0.5, why: positive one}
+  - {symbol: AVAXUSDC,     tier: 0.5, why: positive one}
+  - {symbol: 1000PEPEUSDC, tier: 0.5, why: positive one}
+  - {symbol: BCHUSDC,      tier: 0.5, why: positive one}
+  - {symbol: AAVEUSDC,     tier: 0.5, why: positive one}
+  - {symbol: ZECUSDC,      tier: 0,   why: under 12m history — eligible 19 Nov 2026}
+  - {symbol: BNBUSDC,      tier: 0,   why: negative both periods}
+  - {symbol: ENAUSDC,      tier: 0,   why: negative both periods}
+  - {symbol: NEARUSDC,     tier: 0,   why: negative both periods}
+  - {symbol: FILUSDC,      tier: 0,   why: negative both periods}
+  - {symbol: SUIUSDC,      tier: 0,   why: negative both periods}

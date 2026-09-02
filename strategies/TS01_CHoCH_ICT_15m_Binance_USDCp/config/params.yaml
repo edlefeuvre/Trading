@@ -1,0 +1,71 @@
+# TS01 CHoCH ICT 15m Binance USDCp — parameters
+# Every key here MUST appear in STRATEGY.md §3 with the same value.
+# `make check` enforces it. Keys under `meta:` are exempt.
+meta:
+  slug: TS01_CHoCH_ICT_15m_Binance_USDCp
+  version: "1.7"
+
+mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
+
+credentials:           # <provider>/<name> -> %USERPROFILE%\.config\<provider>\<name>.env
+  exchange: binance/futures-trade
+  telegram: telegram/rickyassist_bot
+timeframe: 15m
+poll_seconds: 30
+
+structure:
+  pivot_k: 5                 # fractal pivot width — locked
+
+entry:
+  gap_window_bars: 2         # FVG must print on the CHoCH bar or the two after
+  sweep_reclaim_bars: 4      # close back through the swept level within 4 bars
+  discount_only: true        # FVG midpoint in the discount half of L..H — locked
+  gtc_window_bars: 32        # 8h; anchored to the FVG bar, not the alert
+  gtc_anchor_bar: fvg
+  post_only: true
+
+data:
+  history_bars: 1500         # bars pulled per cycle (~15 days of 15m)
+
+exit:
+  type: pool
+  pool_consumed_cancel: false   # researched 31 Aug; NOT in the live watcher yet
+  breakeven: false
+
+stop:
+  order_type: stop_market    # or stop_limit_buffered (limit on the far side of trigger)
+  limit_buffer_ticks: 3
+
+target:
+  trigger_offset_ticks: 1    # TP trigger one tick the right side of entry
+
+risk:
+  unit_usd: 20               # charter: max(1% of book, 20)
+  book_usd: 356              # ring-fenced Trading Book; update at the Sunday review
+  symbol_scale: see config/universe.yaml   # tier multipliers 0 / 0.5 / 1.0 per symbol
+  leverage_cap: 20
+  margin_mode: isolated
+  max_open_positions: 3
+  max_notional_usd: 6000
+  daily_loss_stop_r: 3
+
+fees:                        # backtest assumptions; verify the account tier
+  maker: 0.0000
+  taker: 0.0004
+  funding: none              # NOT modelled — do before any LIVE decision
+
+alerts:
+  recompute_r_on_fill: true
+  book: trading              # address book: .config\telegram\trading.env (Bitwarden item telegram/trading)
+  to: trading                # lifecycle alerts        -> TELEGRAM_TO_TRADING
+  critical_to: alerts        # CANCEL NOW / STATE MISMATCH / STOPPED / BLOCKED also -> TELEGRAM_TO_ALERTS
+  weekly_to: digest          # Sunday R-factor review  -> TELEGRAM_TO_DIGEST
+  approvals_to: approvals    # requests for Ed's decision -> TELEGRAM_TO_APPROVALS
+
+coverage:
+  max_age_days: 7            # a symbol with an older engine run is not tradeable
+
+weekly:
+  min_trades_for_r: 30       # below this the R factor is shown as provisional
+  tier_rule: sign_two_periods   # 1.0 both positive, 0.5 one, 0 neither / <12m history
+  lookback_months: 12

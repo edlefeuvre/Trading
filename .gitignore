@@ -1,0 +1,12 @@
+*.env
+.env*
+strategies/*/logs/*
+!strategies/*/logs/.gitkeep
+common/data/cache/
+deploy/systemd/*.service
+deploy/systemd/*.timer
+.venv/
+__pycache__/
+.pytest_cache/
+mirror/
+*.pyc

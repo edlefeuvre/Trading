@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""check-strategy — is STRATEGY.md telling the truth about the folder?
+
+Usage: bin/check-strategy TS01_CHoCH_ICT_15m_Binance_USDCp [...]
+       bin/check-strategy --all
+
+Checks, per strategy:
+  1. frontmatter parses; id/slug match the folder name
+  2. every key in config/params.yaml appears in the §3 Parameters table, and
+     every key in the table exists in params.yaml (values compared as strings)
+  3. mode in frontmatter == mode in params.yaml
+  4. if mode is LIVE: live_approved is set and that date appears in the change log
+  5. every path in the §6 artefact register exists; every file under pine/, src/
+     (excluding tests/__pycache__) and config/ is in the register
+  6. the change log has at least one row and the newest row's version equals
+     the frontmatter version
+Exit 0 if all pass, 1 otherwise. Warnings do not fail.
+"""
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_yaml(path):
+    try:
+        import yaml  # type: ignore
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except ImportError:
+        # minimal flat/one-level parser, enough for params.yaml
+        out, section = {}, None
+        with open(path) as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].rstrip()
+                if not line.strip():
+                    continue
+                indent = len(line) - len(line.lstrip())
+                key, _, val = line.strip().partition(":")
+                val = val.strip().strip("'\"")
+                if indent == 0:
+                    if val == "":
+                        section = key
+                        out[section] = {}
+                    else:
+                        section = None
+                        out[key] = val
+                elif section is not None:
+                    out[section][key] = val
+        return out
+
+
+def flatten(d, prefix=""):
+    items = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        if isinstance(v, dict):
+            items.update(flatten(v, key + "."))
+        else:
+            items[key] = v
+    return items
+
+
+def parse_frontmatter(text):
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        return None
+    fm = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            fm[k.strip()] = v.split("#", 1)[0].strip()
+    return fm
+
+
+def section(text, heading_regex):
+    m = re.search(r"^(#+ .*?)$", text, re.M)  # noqa: F841  (keeps regex import honest)
+    parts = re.split(r"^(?=#{1,3} )", text, flags=re.M)
+    for p in parts:
+        if re.match(heading_regex, p):
+            return p
+    return ""
+
+
+def table_rows(block):
+    rows = []
+    for line in block.splitlines():
+        if line.startswith("|") and not re.match(r"^\|\s*-", line):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            rows.append(cells)
+    return rows[1:] if rows else []  # drop header
+
+
+def same(a, b):
+    """Compare a yaml value and a doc cell: numbers numerically, bools loosely."""
+    sa, sb = str(a).strip().strip("`"), str(b).strip().strip("`")
+    if sa.lower() in ("true", "false") or sb.lower() in ("true", "false"):
+        return sa.lower() == sb.lower()
+    try:
+        return float(sa) == float(sb)
+    except ValueError:
+        return sa == sb
+
+
+def backtick(s):
+    m = re.match(r"^`([^`]+)`", s)
+    return m.group(1) if m else s
+
+
+def check(ts):
+    errors, warns = [], []
+    sdir = os.path.join(ROOT, "strategies", ts)
+    doc = os.path.join(sdir, "STRATEGY.md")
+    if not os.path.isfile(doc):
+        return [f"{ts}: STRATEGY.md missing"], []
+    text = open(doc, encoding="utf-8").read()
+    fm = parse_frontmatter(text)
+    if fm is None:
+        return [f"{ts}: STRATEGY.md has no YAML frontmatter"], []
+
+    # 1 identity
+    if fm.get("slug") != ts:
+        errors.append(f"slug '{fm.get('slug')}' != folder '{ts}'")
+    if not ts.startswith(fm.get("id", "??")):
+        errors.append(f"id '{fm.get('id')}' does not prefix folder '{ts}'")
+
+    # 1b mandate (Board naming convention) if set
+    mandate = fm.get("mandate", "")
+    if mandate:
+        classes = {"EQUITY","FIXED_INCOME","CASH","PRECIOUS_METALS","BTC","CRYPTO","PROPERTY","PRIVATE","DERIVATIVE"}
+        m = re.match(r"^([A-Z_]+)-([a-z0-9]+)-([A-Za-z0-9_]+)$", mandate)
+        if not m or m.group(1) not in classes:
+            errors.append(f"mandate '{mandate}' not [ASSET_CLASS]-[account]-[Type] with a canonical asset class")
+
+    # 2 parameters
+    ppath = os.path.join(sdir, "config", "params.yaml")
+    if os.path.isfile(ppath):
+        params = flatten(load_yaml(ppath))
+        params = {k: v for k, v in params.items() if not k.startswith("meta.")}
+        rows = table_rows(section(text, r"^## 3\. Parameters"))
+        doc_params = {backtick(r[0]): r[1] for r in rows if r and r[0]}
+        for k in params:
+            if k not in doc_params:
+                errors.append(f"params.yaml key '{k}' not in STRATEGY.md §3")
+            elif not same(params[k], doc_params[k]):
+                errors.append(
+                    f"'{k}': params.yaml={params[k]!r} vs §3={doc_params[k]!r}")
+        for k in doc_params:
+            if k not in params:
+                errors.append(f"§3 key '{k}' not in params.yaml")
+        # 2b timeframe token in the folder name must equal params.timeframe
+        toks = ts.split("_")
+        if len(toks) >= 5 and str(params.get("timeframe", "")) != toks[-3]:
+            errors.append(f"folder TF '{toks[-3]}' != params.yaml timeframe '{params.get('timeframe')}'")
+        # 3 mode
+        ymode = str(params.get("mode", "")).upper()
+        if ymode and ymode != fm.get("mode", "").upper():
+            errors.append(f"mode: frontmatter={fm.get('mode')} params.yaml={ymode}")
+    else:
+        warns.append("config/params.yaml missing")
+
+    # 4 live gate
+    if fm.get("mode", "").upper() == "LIVE":
+        la = fm.get("live_approved", "")
+        if not la:
+            errors.append("mode LIVE but live_approved is empty")
+        elif la not in section(text, r"^## Change log"):
+            errors.append(f"live_approved {la} not recorded in change log")
+
+    # 5 artefact register
+    reg_rows = table_rows(section(text, r"^## 6\. Artefact register"))
+    registered = set()
+    for r in reg_rows:
+        if not r or not r[0]:
+            continue
+        p = backtick(r[0])
+        if "…" in p or "..." in p or "*" in p:
+            continue
+        registered.add(p)
+        if not os.path.exists(os.path.join(sdir, p)):
+            errors.append(f"registered artefact missing on disk: {p}")
+    for sub in ("pine", "src", "config", "systemd"):
+        base = os.path.join(sdir, sub)
+        for dp, dn, fn in os.walk(base):
+            dn[:] = [d for d in dn if d not in ("__pycache__", ".pytest_cache")]
+            for f in fn:
+                if f.endswith((".pyc", ".md")) or f.startswith(".") or f == "__init__.py":
+                    continue
+                rel = os.path.relpath(os.path.join(dp, f), sdir).replace(os.sep, "/")
+                if rel.startswith("src/tests/"):
+                    continue  # covered by the `src/tests/…` wildcard row
+                if rel not in registered:
+                    errors.append(f"file not in §6 artefact register: {rel}")
+
+    # 6 change log
+    cl = table_rows(section(text, r"^## Change log"))
+    if not cl:
+        errors.append("change log has no rows")
+    else:
+        newest = cl[0]
+        if len(newest) > 1 and newest[1] != fm.get("version"):
+            errors.append(
+                f"newest change-log version {newest[1]} != frontmatter {fm.get('version')}")
+
+    return [f"{ts}: {e}" for e in errors], [f"{ts}: {w}" for w in warns]
+
+
+def main(argv):
+    if not argv or argv == ["--all"]:
+        sdir = os.path.join(ROOT, "strategies")
+        targets = sorted(d for d in os.listdir(sdir) if d.startswith("TS"))
+    else:
+        targets = argv
+    all_err = 0
+    for ts in targets:
+        errs, warns = check(ts)
+        for w in warns:
+            print(f"  ~ {w}")
+        for e in errs:
+            print(f"  ✗ {e}")
+        if not errs:
+            print(f"  ✓ {ts} consistent")
+        all_err += len(errs)
+    return 1 if all_err else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

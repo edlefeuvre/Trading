@@ -1,0 +1,5 @@
+# TS{{NN}} — tested universe. Adding a symbol is a MAJOR change: it has not been
+# through the engine until results/ says it has.
+platform: {{PLATFORM}}
+product: {{UNIVERSE}}
+symbols: []

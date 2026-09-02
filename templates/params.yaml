@@ -1,0 +1,20 @@
+# TS{{NN}} {{NAME}} {{PLATFORM}} {{UNIVERSE_SPOKEN}} — parameters
+# Every key here MUST appear in STRATEGY.md §3 with the same value.
+# `make check` enforces it. Keys under `meta:` are exempt.
+meta:
+  slug: {{SLUG}}
+  version: "0.1"
+
+mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
+
+credentials:
+  exchange: binance/futures-trade
+  telegram: telegram/rickyassist_bot
+timeframe: {{TF}}
+risk_unit_usd: 20
+
+alerts:
+  book: trading
+  to: trading
+  critical_to: alerts
+  weekly_to: digest

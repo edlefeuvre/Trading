@@ -1,0 +1,26 @@
+[Unit]
+Description=TS{{NN}} {{NAME}} {{PLATFORM}} {{UNIVERSE_SPOKEN}} — runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory={{REPO}}
+EnvironmentFile=/etc/trading/TS{{NN}}.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{REPO}}/.venv/bin/python -m strategies.{{SLUG}}.src.runner
+Restart=on-failure
+RestartSec=15
+# hard stop: if the runner keeps dying, don't flap forever
+StartLimitIntervalSec=600
+StartLimitBurst=5
+SyslogIdentifier=TS{{NN}}
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{REPO}}/strategies/{{SLUG}}/logs {{REPO}}/strategies/{{SLUG}}/results {{REPO}}/common/data/cache
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
