@@ -10,6 +10,8 @@ if (-not $Python) {
   $Python = (Get-Command python -ErrorAction SilentlyContinue).Source
   if (-not $Python) { $Python = "C:\Program Files\Python312\python.exe" }
 }
+$PythonW = Join-Path (Split-Path $Python) "pythonw.exe"
+if (Test-Path -LiteralPath $PythonW) { $Python = $PythonW }
 $action  = New-ScheduledTaskAction -Execute $Python -Argument "-m strategies.TS01_CHoCH_ICT_15m_Binance_USDCp.src.weekly" -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At $At
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

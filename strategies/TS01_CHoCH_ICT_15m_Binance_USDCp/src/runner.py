@@ -33,7 +33,7 @@ from common.alerts import telegram
 from common.data import binance_klines as data
 from common.engine import ict_base as engine
 
-__version__ = "1.8"
+__version__ = "1.9"
 HERE = Path(__file__).resolve().parent.parent           # strategy folder
 REPO = HERE.parent.parent
 SLUG = HERE.name
@@ -165,34 +165,84 @@ def exchange_line(snap: dict | None, sym: str) -> str:
 
 
 # ------------------------------------------------------------ messages ----
-def fmt(x: float) -> str:
-    return f"{x:,.2f}" if x >= 1000 else f"{x:,.6f}".rstrip("0").rstrip(".")
-
-
 def when(ms: int) -> str:
     return dt.datetime.fromtimestamp(ms / 1000, TZ).strftime("%a %d %b %H:%M UTC")
 
 
-def ticket(mode: str, event: str, sym: str, tk: dict, risk_usd: float, tier: float, cap: float,
-           snap: dict | None, extra: list[str] | None = None) -> str:
-    side = "LONG" if tk["d"] == 1 else "SHORT"
-    qty = risk_usd / tk["risk"]
-    flag = "" if tk["poolR"] >= 1.0 else "   [!] pool < 1R"
-    lines = [
-        f"{mode} · {event} · {TS}",
-        f"{sym} · {side} · 15m · signal {when(tk['t_placed'])}",
-        "",
-        f"entry   {fmt(tk['mid'])}   (limit, maker)",
-        f"stop    {fmt(tk['stop'])}   ({tk['stop_pct']:.2f}%)",
-        f"target  {fmt(tk['target'])}",
-        f"pool    {tk['poolR']:.2f} R{flag}",
-        "",
-        f"qty     {qty:,.4f}",
-        f"risk    ${risk_usd:,.2f}   (tier {tier:g} × ${cap:,.2f} ceiling)",
-        f"notion  ${qty * tk['mid']:,.0f}",
-    ]
-    lines += extra or []
-    lines += ["", exchange_line(snap, sym)]
+class Ticket:
+    """Everything needed to key the trade into the Binance USD-M futures form, rounded to the
+    symbol's tick and lot size. Built once per event; rendered by `render`."""
+
+    def __init__(self, params: dict, filters: dict, sym: str, tk: dict, risk_usd: float, tier: float, cap: float):
+        f = filters.get(sym, {})
+        self.tick, self.step = float(f.get("tick", 0) or 0), float(f.get("step", 0) or 0)
+        orders, stop, target, risk = (params.get("orders", {}), params.get("stop", {}),
+                                      params.get("target", {}), params.get("risk", {}))
+        self.sym, self.tk, self.tier, self.cap = sym, tk, tier, cap
+        self.side = "Buy" if tk["d"] == 1 else "Sell"
+        self.pos = "LONG" if tk["d"] == 1 else "SHORT"
+        d = tk["d"]
+        self.price = data.round_to(tk["mid"], self.tick)
+        # size: risk / (entry - stop), rounded DOWN to the lot step so risk never exceeds the unit
+        raw_qty = risk_usd / abs(self.price - tk["stop"]) if self.price != tk["stop"] else 0.0
+        self.qty = data.round_to(raw_qty, self.step, "down")
+        self.notional = self.qty * self.price
+        self.risk_usd_actual = self.qty * abs(self.price - tk["stop"])
+        # take profit: trigger one tick the right side of entry, limit at the pool
+        off = int(target.get("trigger_offset_ticks", 1)) * (self.tick or 0)
+        self.tp_trigger = data.round_to(self.price + d * off, self.tick) if off else None   # profit side of entry
+        self.tp_limit = data.round_to(tk["target"], self.tick)
+        # stop: market on trigger, or limit buffered on the far side
+        self.sl_trigger = data.round_to(tk["stop"], self.tick)
+        self.sl_type = str(stop.get("order_type", "stop_market"))
+        buf = int(stop.get("limit_buffer_ticks", 3)) * (self.tick or 0)
+        self.sl_limit = data.round_to(tk["stop"] + (-d) * buf, self.tick) if self.sl_type == "stop_limit_buffered" else None
+        self.trigger = str(orders.get("trigger_price", "mark")).capitalize()
+        self.tif = str(orders.get("time_in_force", "GTC"))
+        self.post_only = bool(params.get("entry", {}).get("post_only", True))
+        self.reduce_only = bool(orders.get("reduce_only", True))
+        self.margin = str(risk.get("margin_mode", "isolated"))
+        self.lev = risk.get("leverage_cap", 20)
+        self.base = sym.replace("USDC", "").replace("USDT", "")
+
+    def p(self, x):  # price
+        return data.fmt_inc(x, self.tick)
+
+    def q(self, x):  # quantity
+        return data.fmt_inc(x, self.step)
+
+    def block(self) -> list[str]:
+        tp_trig = f"trigger {self.p(self.tp_trigger)} {self.trigger}  → " if self.tp_trigger else ""
+        sl_tail = (f"→ Limit {self.p(self.sl_limit)}" if self.sl_limit is not None else "→ Market")
+        return [
+            "── Binance ticket ────────────────────",
+            f"Order        Limit · {self.side} · {'Post-Only · ' if self.post_only else ''}{self.tif}",
+            f"Price        {self.p(self.price)}",
+            f"Size         {self.q(self.qty)} {self.base}        (≈ ${self.notional:,.0f})",
+            f"Take Profit  {tp_trig}Limit {self.p(self.tp_limit)}",
+            f"Stop Loss    trigger {self.p(self.sl_trigger)} {self.trigger}  {sl_tail}",
+            f"             {'both reduce-only · ' if self.reduce_only else ''}{self.margin} · ≤ {self.lev}x",
+            "─────────────────────────────────────",
+        ]
+
+    def footer(self) -> str:
+        tk = self.tk
+        rounding = "" if abs(self.risk_usd_actual - self.tier * self.cap) < 0.005 else f" → ${self.risk_usd_actual:,.2f} after lot rounding"
+        return (f"stop {tk['stop_pct']:.2f}% · pool {tk['poolR']:.2f} R{'' if tk['poolR'] >= 1 else ' [!] < 1R'} · "
+                f"risk ${self.tier * self.cap:,.2f} (tier {self.tier:g} × ${self.cap:,.2f}){rounding}")
+
+
+def render(mode: str, event: str, t: Ticket, snap: dict | None, extra: list[str] | None = None,
+           with_ticket: bool = True) -> str:
+    tk = t.tk
+    lines = [f"{mode} · {event} · {TS}",
+             f"{t.sym} perp · {t.pos} · 15m · signal {when(tk['t_placed'])}", ""]
+    if with_ticket:
+        lines += t.block()
+    lines.append(t.footer())
+    if extra:
+        lines += extra
+    lines += ["", exchange_line(snap, t.sym)]
     return "\n".join(lines)
 
 
@@ -213,12 +263,14 @@ def cycle(params, tiers, mode: str, a) -> dict:
     discount_only = bool(entry.get("discount_only", True))
     history_bars = int(dcfg.get("history_bars", 1500))
 
+    sent: list[str] = []
+    errors: list[str] = []
     watch = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else [s for s, t in tiers.items() if t > 0]
     st = load_state()
     snap = exchange_snapshot(params)
-    sent: list[str] = []
-    errors: list[str] = []
-
+    filters = data.symbol_filters()
+    if not filters:
+        errors.append("exchangeInfo unavailable: prices/sizes shown unrounded")
     def emit(text: str, to: str = to_main):
         if a.stdout:
             print(text + "\n" + "-" * 40)
@@ -251,29 +303,29 @@ def cycle(params, tiers, mode: str, a) -> dict:
             age = (n - 1) - tk["fvg_bar"]
             status = tk["status"]
 
+            T = Ticket(params, filters, sym, tk, risk_usd, tier, cap)
             if status == "placed" or (a.backfill and age <= a.backfill and not announced and status != "open"):
                 if not announced:
-                    emit(ticket(mode, "SETUP", sym, tk, risk_usd, tier, cap, snap,
-                                [f"window  {live_bars} bars from the FVG bar (paper limit; nothing placed)"]))
+                    emit(render(mode, "SETUP", T, snap,
+                                [f"window {live_bars} bars from the FVG bar · paper limit, nothing placed"]))
                     st[key] = True; sent.append(f"SETUP {sym}")
                 continue
 
             if status == "resting":
                 if not announced:                      # first seen mid-window (e.g. after downtime)
-                    emit(ticket(mode, "SETUP", sym, tk, risk_usd, tier, cap, snap,
-                                [f"resting  {tk['bars_left']} bars left in the window"]))
+                    emit(render(mode, "SETUP", T, snap, [f"resting · {tk['bars_left']} bars left in the window"]))
                     st[key] = True; sent.append(f"SETUP {sym}")
                 elif tk["bars_left"] <= 2 and not st.get(key + ":expiring"):
-                    emit(ticket(mode, "EXPIRING", sym, tk, risk_usd, tier, cap, snap,
-                                [f"window closes in {tk['bars_left']} bar(s); unfilled → cancel"]))
+                    emit(render(mode, "EXPIRING", T, snap,
+                                [f"window closes in {tk['bars_left']} bar(s) · unfilled → cancel the limit"]))
                     st[key + ":expiring"] = True; sent.append(f"EXPIRING {sym}")
                 continue
 
             if status == "open":
                 fkey = f"{sym}:fill:{tk['t_filled']}"
                 if not st.get(fkey):
-                    emit(ticket(mode, "FILLED (paper)", sym, tk, risk_usd, tier, cap, snap,
-                                [f"filled  {when(tk['t_filled'])} — price touched the paper limit",
+                    emit(render(mode, "FILLED (paper)", T, snap,
+                                [f"filled {when(tk['t_filled'])} · price touched the paper limit",
                                  f"unrealised {tk['unreal_R']:+.2f} R"]))
                     st[fkey] = True; st.setdefault(key, True); sent.append(f"FILLED {sym}")
                 continue
@@ -282,17 +334,17 @@ def cycle(params, tiers, mode: str, a) -> dict:
                 ckey = f"{sym}:closed:{tk['t_exit']}"
                 if not st.get(ckey):
                     ev = "STOPPED (paper)" if tk["outcome"] == "stop" else "TARGET HIT (paper)"
-                    emit(ticket(mode, ev, sym, tk, risk_usd, tier, cap, snap,
-                                [f"filled  {when(tk['t_filled'])}", f"exit    {when(tk['t_exit'])}",
-                                 f"result  {tk['net_R']:+.2f} R   ({'stop, taker fee included' if tk['outcome']=='stop' else 'pool reached'})"]))
+                    emit(render(mode, ev, T, snap,
+                                [f"filled {when(tk['t_filled'])} · exit {when(tk['t_exit'])}",
+                                 f"result {tk['net_R']:+.2f} R   ({'stop, taker fee included' if tk['outcome']=='stop' else 'pool reached'})"]))
                     st[ckey] = True; sent.append(f"{ev.split()[0]} {sym}")
                 continue
 
             if status == "expired" and announced:
                 xkey = f"{sym}:expired:{tk['t_expired']}"
                 if not st.get(xkey):
-                    emit(ticket(mode, "WINDOW EXPIRED · CANCEL", sym, tk, risk_usd, tier, cap, snap,
-                                [f"no fill within {live_bars} bars of the FVG bar; the paper limit is cancelled"]))
+                    emit(render(mode, "WINDOW EXPIRED · CANCEL", T, snap,
+                                [f"no fill within {live_bars} bars of the FVG bar · cancel the limit"]))
                     st[xkey] = True; sent.append(f"EXPIRED {sym}")
                 continue
 

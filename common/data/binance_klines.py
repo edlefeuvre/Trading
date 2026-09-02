@@ -151,3 +151,60 @@ def history(sym: str, start: tuple[int, int] = (2024, 1), interval: str = "15m",
     if verbose:
         print(f"  {sym:<14} {len(out):>7} bars", file=sys.stderr)
     return out
+
+
+# -------------------------------------------------------- exchange info ---
+def symbol_filters(cache: Path = DEFAULT_CACHE, max_age_h: int = 24) -> dict:
+    """{symbol: {"tick": price tick size, "step": quantity step, "min_qty": ...}} for all USD-M
+    perps, from /fapi/v1/exchangeInfo, cached for max_age_h hours. Returns {} on failure so
+    callers fall back to unrounded values rather than failing."""
+    cache.mkdir(parents=True, exist_ok=True)
+    path = cache / "exchange_info_filters.json"
+    try:
+        if path.exists() and (time.time() - path.stat().st_mtime) < max_age_h * 3600:
+            return json.load(open(path, encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    out = {}
+    for host in ("https://fapi.binance.com", "https://fapi1.binance.com", "https://fapi2.binance.com"):
+        try:
+            req = urllib.request.Request(host + "/fapi/v1/exchangeInfo", headers={"User-Agent": "trading-server/0.1"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                info = json.load(r)
+            for s in info.get("symbols", []):
+                f = {x["filterType"]: x for x in s.get("filters", [])}
+                out[s["symbol"]] = {
+                    "tick": float(f.get("PRICE_FILTER", {}).get("tickSize", 0) or 0),
+                    "step": float(f.get("LOT_SIZE", {}).get("stepSize", 0) or 0),
+                    "min_qty": float(f.get("LOT_SIZE", {}).get("minQty", 0) or 0),
+                    "min_notional": float(f.get("MIN_NOTIONAL", {}).get("notional", 0) or 0),
+                }
+            json.dump(out, open(path, "w", encoding="utf-8"))
+            return out
+        except Exception:  # noqa: BLE001
+            continue
+    try:
+        return json.load(open(path, encoding="utf-8")) if path.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def round_to(value: float, increment: float, mode: str = "nearest") -> float:
+    """Round a price/qty to an exchange increment. mode: nearest | down | up."""
+    if not increment or increment <= 0:
+        return value
+    import math
+    q = value / increment
+    n = math.floor(q + 1e-9) if mode == "down" else math.ceil(q - 1e-9) if mode == "up" else round(q)
+    return round(n * increment, 12)
+
+
+def fmt_inc(value: float, increment: float, grouping: bool = False) -> str:
+    """Format a value with exactly the decimals its increment implies (0.01 -> 2 dp).
+    No thousands separator by default, so the value pastes straight into an order form."""
+    g = "," if grouping else ""
+    if not increment or increment <= 0:
+        return f"{value:{g}.6f}".rstrip("0").rstrip(".")
+    s = f"{increment:.12f}".rstrip("0")
+    dp = len(s.split(".")[1]) if "." in s else 0
+    return f"{value:{g}.{dp}f}"

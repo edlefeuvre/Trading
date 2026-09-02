@@ -3,7 +3,7 @@
 # `make check` enforces it. Keys under `meta:` are exempt.
 meta:
   slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-  version: "1.8"
+  version: "1.9"
 
 mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
 
@@ -33,12 +33,18 @@ exit:
   pool_consumed_cancel: false   # researched 31 Aug; NOT in the live watcher yet
   breakeven: false
 
+orders:                      # how the Binance ticket is written (and, later, placed)
+  time_in_force: GTC
+  trigger_price: mark        # TP/SL trigger on Mark price (not Last)
+  reduce_only: true          # TP and SL both reduce-only
+
 stop:
   order_type: stop_market    # or stop_limit_buffered (limit on the far side of trigger)
   limit_buffer_ticks: 3
 
 target:
-  trigger_offset_ticks: 1    # TP trigger one tick the right side of entry
+  order_type: take_profit_limit
+  trigger_offset_ticks: 1    # TP trigger one tick the right side of entry so the pool limit rests from the start
 
 risk:
   unit_usd: 20               # charter: max(1% of book, 20)

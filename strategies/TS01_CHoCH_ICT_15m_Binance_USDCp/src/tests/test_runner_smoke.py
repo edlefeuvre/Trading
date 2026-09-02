@@ -26,6 +26,7 @@ def sandbox(tmp_path, monkeypatch):
     # seeds chosen because they carry a completed setup inside the last 400 bars
     bars = {"SYMA": synth(6), "SYMB": synth(51), "SYMC": synth(0)}
     monkeypatch.setattr(runner.data, "klines_paged", lambda sym, total, interval="15m": bars[sym])
+    monkeypatch.setattr(runner.data, "symbol_filters", lambda *a, **k: {s: {"tick": 0.01, "step": 0.001} for s in bars})
     return here, sent
 
 
@@ -46,14 +47,24 @@ def test_cycle_sends_prefixed_messages_and_dedupes(sandbox):
         head = text.splitlines()[0]
         assert head.startswith("PAPER · ") and head.endswith("· TS01"), head
     for text in setups:
-        assert "tier 1 × $20.00 ceiling" in text and "exchange  not checked" in text and "(limit, maker)" in text
+        assert "tier 1 × $20.00" in text and "exchange  not checked" in text
+        assert "── Binance ticket" in text and "Take Profit  trigger" in text and "Stop Loss    trigger" in text
+        assert "→ Market" in text and "both reduce-only · isolated · ≤ 20x" in text
+        price = [l for l in text.splitlines() if l.startswith("Price")][0].split()[1]
+        assert len(price.split(".")[1]) == 2, price          # rounded to the 0.01 tick
+        tp = [l for l in text.splitlines() if l.startswith("Take Profit")][0].split()
+        trig, limit = float(tp[3]), float(tp[7])
+        long = " LONG " in text
+        assert (trig > float(price)) == long and (limit > float(price)) == long, "TP trigger/limit on the profit side"
+        size = [l for l in text.splitlines() if l.startswith("Size")][0].split()[1]
+        assert len(size.split(".")[1]) == 3, size            # rounded to the 0.001 step
     assert (here / "results" / "state.json").is_file()
     n_first = len(sent)
     # cycle 2: the same historical setups are now announced, so their closures are reported once
     _run("SYMA,SYMB,SYMC", backfill=400)
     closes = [t for _, t in sent[n_first:] if "STOPPED (paper)" in t or "TARGET HIT (paper)" in t]
     assert len(closes) == 2, [t.splitlines()[0] for _, t in sent[n_first:]]
-    assert all("result  " in t for t in closes)
+    assert all("result " in t and "── Binance ticket" in t for t in closes)
     n_second = len(sent)
     # cycle 3: nothing new
     _run("SYMA,SYMB,SYMC", backfill=400)

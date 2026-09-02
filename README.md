@@ -40,7 +40,7 @@ titles and Python module paths.
 ## Layout
 
 ```
-Trading/                    (%USERPROFILE%\Trading on the PC)
+Trading/                    (%USERPROFILE%\Repos\Trading on the PC)
 ├── README.md                  ← this file: the conventions
 ├── CLAUDE.md                  ← instructions to Claude Code on the server
 ├── Makefile                   ← new-strategy, check, install, status

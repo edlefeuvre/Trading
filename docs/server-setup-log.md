@@ -23,7 +23,7 @@ strategy (new number) and Ed wants to tell them apart at a glance in Telegram.
 
 | Thing | Where | Why |
 |---|---|---|
-| Code and STRATEGY.md | `C:\Users\Admin\Repos\Trading` — a git repo, GitHub as remote/backup | `Repos\` is the one root for every repository (PaperclipAI already there); nothing in git lives under OneDrive |
+| Code and STRATEGY.md | `%USERPROFILE%\Repos\Trading` — a git repo, GitHub as remote/backup | `%USERPROFILE%\Repos\` is the one root for every repository (PaperclipAI already there); nothing in git lives under OneDrive |
 | Documents Ed reads on the phone | `OneDrive\TRA` (exports only, never a source) | OneDrive renders Markdown; GitHub app is the alternative but Ed prefers OneDrive |
 | Runtime secrets | `%USERPROFILE%\.config\<provider>\<name>.env` — `telegram\rickyassist_bot.env`, `binance\readonly.env`, `binance\futures-trade.env` … | Same convention the GARCH launcher already used (`.config\telegram-webhook\secrets.env`) |
 | Master of secrets | Bitwarden (free account), folder per provider, one Secure-note item per key/bot, single Hidden field per secret + Text fields for audit (`Username`, `Ownership`, `Rotated`, note `used_by`) | Rotate from the phone; PC pulls with `deploy\windows\sync-secrets.ps1` (hourly task optional) |
@@ -79,7 +79,7 @@ tell Ed what to do at the exchange rather than wait for a reply.
   Its `strategies\{active,archived,watchlist}` are empty → `STRATEGY.md` becomes the
   strategy format for both repos. Working copy is full of Paperclip agent scratch
   (payload/response JSON in `logs\` and the repo root) — ignore-listed on 2 Sep, not committed.
-  To move under `Repos\` later (update the three task paths).
+  To move to `%USERPROFILE%\Repos\investment-portfolio` later (update the three task paths).
 - `TelegramWebhookRickyAI` — Task Scheduler (Running): `investment-portfolio\scripts\telegram-webhook-launcher.ps1`
   → `telegram-webhook-server.js` (Node). **This is Ricky's inbound receiver.** It forwards
   Ed's Telegram messages to the Paperclip agent using the JWT in `telegram-webhook\secrets.env`

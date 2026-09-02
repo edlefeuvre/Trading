@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.8
+version: 1.9
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -110,8 +110,12 @@ match this table; `make check` diffs them.
 | `exit.type` | pool | none — MAJOR | engine, runner |
 | `exit.pool_consumed_cancel` | false | flip to true only when the runner implements it (MAJOR) | runner — researched, not live |
 | `exit.breakeven` | false | none — MAJOR | engine, runner |
+| `orders.time_in_force` | GTC | none | runner — ticket |
+| `orders.trigger_price` | mark | mark / last | runner — TP/SL trigger price type on the ticket |
+| `orders.reduce_only` | true | none | runner — ticket |
 | `stop.order_type` | stop_market | stop_market / stop_limit_buffered | runner |
 | `stop.limit_buffer_ticks` | 3 | 1–10 (only if stop_limit_buffered) | runner |
+| `target.order_type` | take_profit_limit | none | runner — ticket |
 | `target.trigger_offset_ticks` | 1 | 1–2 | runner |
 | `risk.unit_usd` | 20 | set by charter: max(1% book, 20) | runner, journal |
 | `risk.symbol_scale` | see config/universe.yaml | 0 / 0.5 / 1.0 per symbol, set by the Sunday programme, applied by Ed | runner — tier multipliers of the ceiling |
@@ -395,6 +399,7 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-03 | 1.9 | §3, §5 | Every notification now carries a Binance-form ticket block (Order / Price / Size / Take Profit trigger→Limit / Stop Loss trigger→Market, reduce-only, margin, leverage) with price and size rounded to the symbol's real tick and lot size from exchangeInfo (cached daily). `orders.*` parameters added. | `src/runner.py`, `common/data/binance_klines.py`, `config/params.yaml` |
 | 2026-09-02 | 1.8 | §3, §6, §8 | Runner v0: `choch_watch.py` migrated into `src/runner.py` on top of `common/engine`, `common/data`, `common/alerts`, `common/exchange`. PAPER only; MODE prefix on every message; new lifecycle events; SERVER_RO reconciliation read and `holdings.json`; JSONL cycle log; hourly heartbeat. Engine equivalence proven by test. Task Scheduler registration script for Windows. | `src/runner.py`, `src/tests/*`, `config/params.yaml`, `common/engine/ict_base.py`, `common/data/binance_klines.py`, `common/exchange/binance.py`, `deploy/windows/register-ts01-runner.ps1` |
 | 2026-09-02 | 1.7 | §2, §3, §5, §6, §8a, §9a, frontmatter | Spec rewritten from the live code (`choch_watch.py`, `choch_sizes.py`): sweep reclaim ≤4 bars, discount-only filter, target = pivot A, stop-before-target, fee on stops only, funding not modelled. Pool-consumed cancel marked researched-not-live and set false. Universe = the 21 `SYMBOLS` with tiers from `sizes.json`; coverage register populated with tiers. `mandate:` field added (Board naming convention). | `STRATEGY.md`, `config/params.yaml`, `config/universe.yaml`, `docs/conventions/*` |
 | 2026-09-02 | 1.6 | name | Timeframe added to the naming convention: folder `TS01_CHoCH_ICT_15m_Binance_USDCp`. `make check` now requires the TF token to equal `params.timeframe`. | folder rename, `STRATEGY.md`, `config/params.yaml` |
