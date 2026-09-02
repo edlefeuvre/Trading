@@ -12,7 +12,7 @@ Read `README.md` first. The conventions there are not optional.
    `STRATEGY.md`: date, version, section, one-line summary, files touched. Bump
    `version:` in the frontmatter. MAJOR if the tested spec changed, else MINOR.
 4. If you added, renamed or deleted a file, update the artefact register (§6).
-5. Run `make check`. It must pass before you commit.
+5. Run `python bin/check-strategy --all` (or `make check`). It must pass before you commit.
 
 The pre-commit hook enforces step 3. Do not bypass it with `--no-verify`.
 
@@ -41,15 +41,18 @@ confirmed against the exchange in the same cycle. The full contract is
 
 ## Testing
 
-`pytest strategies/<TSnn>/src/tests` must pass. Each strategy has replay
-acceptance tests in `src/tests/test_replay.py` driven by
-`results/acceptance/*.jsonl`; if you change lifecycle logic, run them.
+`pytest strategies/<TSnn>/src/tests` must pass. TS01 has `test_engine_equivalence.py`
+(the engine must reproduce the pre-migration functions exactly — if you touch
+`common/engine`, this is the test that tells you whether you changed the strategy),
+`test_runner_smoke.py` (three PAPER cycles on synthetic bars), and `test_replay.py`
+for the acceptance cases in `results/acceptance/*.jsonl`.
 
 ## Don't
 
 - Don't put secrets, `.env` files, or logs in git.
 - Don't create a strategy folder by hand — use `make new`.
-- Don't edit `deploy/systemd/*` directly; edit the strategy's `systemd/` and
-  re-run `make install`.
+- On the Windows PC the supervisor is Task Scheduler (`deploy/windows/register-*.ps1`);
+  `systemd/` is the Linux variant. Don't edit generated units by hand.
+- Never write to `%USERPROFILE%\.config\telegram-webhook\` — Paperclip owns it.
 - Don't modify `common/engine` "just for TS01". If a change is strategy-specific
   it belongs in the strategy's `src/`.

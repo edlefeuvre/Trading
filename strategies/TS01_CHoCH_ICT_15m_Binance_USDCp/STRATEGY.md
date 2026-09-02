@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.7
+version: 1.8
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -94,7 +94,8 @@ match this table; `make check` diffs them.
 | Key (params.yaml) | Value | Range allowed without MAJOR | Where used |
 |---|---|---|---|
 | `mode` | PAPER | PAPER / SHADOW (LIVE needs `live_approved`) | runner |
-| `credentials.exchange` | binance/futures-trade | none | runner — `.config\binance\futures-trade.env` |
+| `credentials.exchange` | binance/SERVER_TRADING_RW | none | runner — order placement; unused in PAPER (v0 cannot place orders) |
+| `credentials.exchange_ro` | binance/SERVER_RO | none | runner — reconciliation read → `results/holdings.json` |
 | `credentials.telegram` | telegram/rickyassist_bot | none | runner, weekly — `.config\telegram\rickyassist_bot.env` |
 | `timeframe` | 15m | none — MAJOR | engine, runner, pine |
 | `poll_seconds` | 30 | 10–60 | runner |
@@ -131,6 +132,8 @@ match this table; `make check` diffs them.
 | `alerts.critical_to` | alerts | any name in the book | runner — CANCEL NOW / STATE MISMATCH / STOPPED / BLOCKED also here |
 | `alerts.weekly_to` | digest | any name in the book | weekly — Sunday R-factor review |
 | `alerts.approvals_to` | approvals | any name in the book | runner — requests for Ed's decision |
+| `alerts.syslog_to` | syslog | any name in the book | runner — heartbeat and errors to Ricky Logs / Systems |
+| `alerts.heartbeat_minutes` | 60 | 30–240 | runner |
 | `coverage.max_age_days` | 7 | 7–14 | runner (refuses symbols with stale coverage) |
 | `weekly.min_trades_for_r` | 30 | 20–50 | weekly report (R factor shown as provisional below this) |
 
@@ -198,20 +201,21 @@ row.
 | `config/params.yaml` | parameters | 1.0 | §3 is its documentation |
 | `config/universe.yaml` | the 21 symbols with tier multipliers | 1.7 | adding a symbol is MAJOR; tiers change only via the Sunday programme + Ed |
 | `pine/TS01_CHoCH_alerts.pine` | TradingView indicator: sweep → CHoCH → gap bar, alert on bar close | — | **migrate from:** current TradingView script(s). Header comment must carry `TS01 v<version>`. Alerts are for eyes and the journal; the runner detects independently. |
-| `src/runner.py` | live/paper/shadow runner | 1.0 skeleton | **migrate from:** `C:\Users\Admin\choch\choch_watch.py` (Task `CHoCH watcher`, every 15 min). Detection code unchanged; gains the mode prefix, event alerts and (with keys) reconciliation. |
-| `src/weekly.py` | the Sunday programme (§8a) | 1.1 skeleton | **migrate from:** `choch_sizes.py`. Proposes tiers; Ed applies. |
+| `src/runner.py` | PAPER runner, one cycle per invocation | 1.8 | `choch_watch.py` migrated 2 Sep 2026. Detection unchanged (imports `common/engine`); adds MODE prefix, FILLED/STOPPED/TARGET HIT/EXPIRING/WINDOW EXPIRED events, SERVER_RO reconciliation read, `results/holdings.json`, `results/state.json` (seeded from `~/.choch-watch/state.json` on first run), `logs/TS01-runner.jsonl`, hourly HEARTBEAT to syslog. Refuses LIVE/SHADOW. |
+| `src/weekly.py` | the Sunday programme (§8a) | 1.8 | `choch_sizes.py` migrated 2 Sep 2026 on `common/engine` + `common/data`. Writes `results/weekly/<date>/r_factors.csv` + `summary.md`, sends to Digest, proposes tier changes; `--apply` rewrites `universe.yaml` tiers for Ed to commit. |
 | `src/backtest.py` | backtest entry point | 1.0 skeleton | calls `common/engine` with this folder's config |
-| `src/tests/…` | replay acceptance + unit tests | 1.0 | `results/acceptance/*.jsonl` |
-| `systemd/TS01-runner.service` | long-running runner | 1.0 | |
-| `systemd/TS01-weekly.service` | the Sunday programme | 1.1 | |
-| `systemd/TS01-weekly.timer` | Sun 06:00 UTC, before the Sunday pass | 1.1 | |
-| `results/` | `weekly/YYYY-MM-DD/`, `coverage.csv`, `holdings.json`, `acceptance/` | | small CSV/MD/JSON only; klines stay in `common/data/cache` |
+| `src/tests/…` | tests | 1.8 | `test_engine_equivalence.py` proves `common/engine` reproduces the pre-migration functions bar-for-bar on 40 synthetic series; `test_runner_smoke.py` runs three PAPER cycles with mocked data (prefix, tier line, exchange line, dedupe, closures once); `test_replay.py` awaits the five acceptance cases |
+| `systemd/TS01-runner.service` | Linux variant (not used on the Windows PC) | 1.0 | |
+| `systemd/TS01-weekly.service` | Linux variant | 1.1 | |
+| `systemd/TS01-weekly.timer` | Linux variant | 1.1 | |
+| `../../deploy/windows/register-ts01-runner.ps1` | Task Scheduler task `TS01-runner`, every 15 min at :00:30 | 1.8 | replaces `CHoCH watcher` once both agree for a few days |
+| `../../deploy/windows/register-ts01-weekly.ps1` | Task Scheduler task `TS01-weekly`, Sundays 08:00 local | 1.8 | |
+| `results/` | `state.json` (dedupe + heartbeat clock), `holdings.json` (exchange snapshot), `weekly/YYYY-MM-DD/`, `coverage.csv`, `acceptance/` | | small JSON/CSV/MD only; klines cache lives in `%USERPROFILE%\.config\trading-data` |
 
 Shared code this strategy depends on (documented in `common/*/README.md`, and
 any behavioural change there adds a row to this file's change log):
-`common/engine` (**migrate from:** the `ENGINE (verbatim)` block shared by `choch_watch.py` and `choch_sizes.py` — `pivots`, `setups`, the sweep/FVG/discount/fill/exit logic of `live_state`/`build_trades`), `common/exchange` (Binance
-USDC-perp client, reconciliation), `common/alerts` (Telegram), `common/data`
-(**migrate from:** `klines()`/`klines_paged()` for live bars and `history()`/`month()`/`day()` for the archive with its `.pkl.gz` cache under `~/.choch-watch/data`).
+`common/engine/ict_base.py` (the `ENGINE (verbatim)` block of `choch_watch.py`/`choch_sizes.py`, moved 2 Sep 2026 with the encoding choices as named parameters; equivalence test in `src/tests`), `common/exchange` (Binance
+USDC-perp client, reconciliation), `common/alerts` (Telegram), `common/data/binance_klines.py` (live `klines`/`klines_paged` and archive `history`/`month`/`day`, moved 2 Sep 2026; cache under `%USERPROFILE%\.config\trading-data`), `common/exchange/binance.py` (read-only client, `--test` audit).
 
 ## 7. Gate to live
 
@@ -236,12 +240,12 @@ deviations in the journal; they do not count toward row 6.
 
 | | |
 |---|---|
-| Runner unit | `TS01-runner.service` — `Restart=on-failure`, 5 restarts / 10 min then stop and alert |
-| Scheduled jobs | `TS01-weekly.timer` Sun 06:00 UTC → `src/weekly.py` (§8a). Replaces the generic backtest refresh. |
-| Credentials | by provider under `%USERPROFILE%\.config\`: `binance\futures-trade.env` (futures, trade, no withdrawals, IP-locked), `binance\readonly.env` (reports), `telegram\rickyassist_bot.env`. Bitwarden is the master; a sync script refreshes the files. |
-| Logs | journald (`journalctl -fu TS01-runner`) + `logs/TS01-runner.jsonl` (one line per event, the paper log) |
+| Runner | Windows Task Scheduler task `TS01-runner`: `python -m strategies.TS01_CHoCH_ICT_15m_Binance_USDCp.src.runner` from `%USERPROFILE%\Repos\Trading`, every 15 min at hh:00:30 / 15:30 / 30:30 / 45:30 (30 s after bar close so the closed candle is final), 10-min limit, 3 restarts a minute apart. Registered by `deploy\windows\register-ts01-runner.ps1`. Runs alongside `CHoCH watcher` until they agree, then the old task is disabled. |
+| Scheduled jobs | `TS01-weekly` task, Sun 06:00 UTC → `src/weekly.py` (§8a); `TS-secrets-sync` hourly (optional) |
+| Credentials | by provider under `%USERPROFILE%\.config\`: `binance\SERVER_RO.env` (Enable Reading only — reconciliation, reports, Sunday programme), `binance\SERVER_TRADING_RW.env` (Enable Futures only — order placement, created only after the paper gate), `telegram\rickyassist_bot.env`. The Investment Book uses its own `SERVER_INVEST_RW` (margin loan / options), never shared with Trading. No server key has withdrawals or transfers. All IP-restricted. Bitwarden is the master; `sync-secrets.ps1` refreshes the files. |
+| Logs | `logs/TS01-runner.jsonl` — one JSON line per cycle (symbols, events sent, errors, exchange counts) plus reconcile failures; Task Scheduler history for the process itself |
 | Data dependencies | `common/data` cache of 15m klines + funding for every symbol in `universe.yaml`; the weekly job extends the cache to the latest complete Saturday 23:45 UTC bar |
-| Restart policy | On restart the runner reconciles before anything else; internal state is a cache and is rebuilt from the exchange |
+| Restart policy | Each cycle is a fresh process: it reconciles (reads the exchange with SERVER_RO) before evaluating; `results/state.json` only remembers what has been announced |
 | Paperclip (later) | The units are the contract: one process per strategy, one job per timer, env from `/etc/trading/TS01.env` |
 
 Automation order, decided 31 Aug: detection → paper logging (no placement) →
@@ -391,12 +395,13 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-02 | 1.8 | §3, §6, §8 | Runner v0: `choch_watch.py` migrated into `src/runner.py` on top of `common/engine`, `common/data`, `common/alerts`, `common/exchange`. PAPER only; MODE prefix on every message; new lifecycle events; SERVER_RO reconciliation read and `holdings.json`; JSONL cycle log; hourly heartbeat. Engine equivalence proven by test. Task Scheduler registration script for Windows. | `src/runner.py`, `src/tests/*`, `config/params.yaml`, `common/engine/ict_base.py`, `common/data/binance_klines.py`, `common/exchange/binance.py`, `deploy/windows/register-ts01-runner.ps1` |
 | 2026-09-02 | 1.7 | §2, §3, §5, §6, §8a, §9a, frontmatter | Spec rewritten from the live code (`choch_watch.py`, `choch_sizes.py`): sweep reclaim ≤4 bars, discount-only filter, target = pivot A, stop-before-target, fee on stops only, funding not modelled. Pool-consumed cancel marked researched-not-live and set false. Universe = the 21 `SYMBOLS` with tiers from `sizes.json`; coverage register populated with tiers. `mandate:` field added (Board naming convention). | `STRATEGY.md`, `config/params.yaml`, `config/universe.yaml`, `docs/conventions/*` |
 | 2026-09-02 | 1.6 | name | Timeframe added to the naming convention: folder `TS01_CHoCH_ICT_15m_Binance_USDCp`. `make check` now requires the TF token to equal `params.timeframe`. | folder rename, `STRATEGY.md`, `config/params.yaml` |
 | 2026-09-02 | 1.5 | name, §2 | Renamed to `TS01_CHoCH_ICT_15m_Binance_USDCp` (ICT variant: sweep → CHoCH → FVG); FVG vocabulary adopted from the live watcher; pivot width k=5 confirmed from `choch_watch.py`. | `STRATEGY.md`, folder rename, `systemd/*`, `config/*` |
 | 2026-09-02 | 1.4 | §3, §5 | Telegram destinations now come from a purpose address book (`telegram/trading`) using Telegram's `<chat>_<topic>` notation; strategy names destinations (`trading`, `alerts`, `digest`, `approvals`), never numbers. | `config/params.yaml`, `common/alerts/telegram.py`, `common/alerts/README.md` |
 | 2026-09-02 | 1.3 | §3, §5 | Alerts routed to Telegram forum topics in the single RickyAI group (lifecycle → 03 Crypto, critical also → 99 Alerts); sender gained topic support and `--topics` discovery. | `config/params.yaml`, `common/alerts/telegram.py` |
-| 2026-09-02 | 1.2 | §3, §8 | Credentials referenced by provider/name (`binance/futures-trade`, `telegram/rickyassist_bot`) instead of a per-strategy env file; Telegram sender added in `common/alerts/telegram.py` with Windows setup script. | `config/params.yaml`, `STRATEGY.md`, `common/alerts/telegram.py`, `common/alerts/README.md`, `deploy/windows/setup-telegram.ps1` |
+| 2026-09-02 | 1.2 | §3, §8 | Credentials referenced by provider/name (`binance/SERVER_TRADING_RW`, `telegram/rickyassist_bot`) instead of a per-strategy env file; Telegram sender added in `common/alerts/telegram.py` with Windows setup script. | `config/params.yaml`, `STRATEGY.md`, `common/alerts/telegram.py`, `common/alerts/README.md`, `deploy/windows/setup-telegram.ps1` |
 | 2026-09-02 | 1.1 | §2, §3, §6, §7, §8a, §8b, §9a | Corrected the universe to the 21 liquid USDC.p pairs (UNI included); added the coverage register, holdings file and the Sunday programme that refreshes R factors and sends them for review. Coverage rows pending the existing 21-pair results being filed. | `STRATEGY.md`, `config/params.yaml`, `config/universe.yaml`, `src/weekly.py`, `systemd/TS01-weekly.*` |
 | 2026-09-02 | 1.0 | all | Captured the tested spec, parameters, execution rules, alert contract, gate status and evidence from the 28 Aug–2 Sep notes into the standard document. Runner/backtest are skeletons pending migration of the Ricky AI bot and the locked engine. | `STRATEGY.md`, `config/params.yaml`, `config/universe.yaml`, `src/runner.py`, `src/backtest.py`, `src/tests/test_replay.py`, `systemd/*` |
 | 2026-09-02 | 0.1 | all | Created from template | `STRATEGY.md` |

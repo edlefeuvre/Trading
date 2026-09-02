@@ -62,5 +62,5 @@ logs:
 mirror:
 	@test -n "$(SLUG)" || { echo "no strategy for TS=$(TS)"; exit 2; }
 	mkdir -p mirror
-	cp strategies/$(SLUG)/STRATEGY.md mirror/TS$(TS)-strategy.md
-	@echo "mirror/TS$(TS)-strategy.md ready — upload to the Claude Trading project as claude/TS$(TS)-strategy.md"
+	cp strategies/$(SLUG)/STRATEGY.md mirror/$(SLUG)-STRATEGY.md
+	@echo "mirror/$(SLUG)-STRATEGY.md ready — upload to the Claude Trading project as claude/$(SLUG)-STRATEGY.md"

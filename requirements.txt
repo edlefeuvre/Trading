@@ -1,6 +1,6 @@
 pyyaml>=6
-ccxt>=4
-pandas>=2
-numpy>=1.26
-requests>=2.31
 pytest>=8
+# optional, for later work:
+# ccxt>=4
+# pandas>=2
+# numpy>=1.26

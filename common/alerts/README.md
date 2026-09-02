@@ -46,7 +46,7 @@ Strategies reference a bot in `params.yaml`:
 
 ```yaml
 credentials:
-  exchange: binance/futures-trade
+  exchange: binance/SERVER_TRADING_RW
   telegram: telegram/rickyassist_bot
 ```
 

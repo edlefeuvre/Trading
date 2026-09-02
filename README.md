@@ -5,6 +5,15 @@ folder under `strategies/` and is described, governed and change-logged by the
 `STRATEGY.md` inside it. Nothing about a strategy is allowed to live only in
 someone's head, a chat thread or a Telegram message.
 
+## Hard rules
+
+1. **Code and the strategy document change together, in the same commit.** The hook refuses otherwise.
+2. **PAPER by default.** `mode: LIVE` needs `live_approved:` written by Ed in `STRATEGY.md` and a change-log row; the runner refuses without both. No agent or script ever sets it.
+3. **Every message says its mode.** `PAPER · SETUP · TS01`. A message must never assert a position that was not read from the exchange in the same cycle.
+4. **Secrets never enter the repo.** Bitwarden → `%USERPROFILE%\.config\<provider>\<name>.env` via `deploy\windows\sync-secrets.ps1`. No server key may withdraw or transfer.
+5. **`results/` is a record.** Add to it; never rewrite it. A wrong backtest gets a new file saying so.
+6. **Private repository, always.**
+
 ## Naming
 
 ```
@@ -120,7 +129,11 @@ trade-only keys, withdrawals disabled, IP-allowlisted. `.gitignore` refuses
 
 ## Mirror to the Claude "Trading" project
 
-The repo `STRATEGY.md` is canonical. At each Sunday pass (or after any MAJOR
-bump) the current file is copied into the Trading project as
-`claude/<TSnn>-strategy.md` so it is readable from any Claude surface. The copy
-is read-only by convention: edits go to the repo, then get re-mirrored.
+The repo `STRATEGY.md` is canonical. Inside the repo the folder carries the
+identity, so the file is just `STRATEGY.md`. **Anywhere the file stands alone it
+carries the full slug**: the Claude project copy is
+`claude/<slug>-STRATEGY.md` (e.g. `TS01_CHoCH_ICT_15m_Binance_USDCp-STRATEGY.md`)
+and the OneDrive export is `TRA\10_Strategies\<slug>\<slug>-STRATEGY.md`, with
+weekly outputs beside it as `<slug>-weekly-<date>.md`. Copies are read-only by
+convention: edits go to the repo, then get re-mirrored at the Sunday pass or
+after any MAJOR bump.

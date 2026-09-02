@@ -3,12 +3,13 @@
 # `make check` enforces it. Keys under `meta:` are exempt.
 meta:
   slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-  version: "1.7"
+  version: "1.8"
 
 mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
 
 credentials:           # <provider>/<name> -> %USERPROFILE%\.config\<provider>\<name>.env
-  exchange: binance/futures-trade
+  exchange: binance/SERVER_TRADING_RW   # order placement (unused in PAPER; runner v0 cannot place orders)
+  exchange_ro: binance/SERVER_RO        # reconciliation read: positions, open orders -> results/holdings.json
   telegram: telegram/rickyassist_bot
 timeframe: 15m
 poll_seconds: 30
@@ -61,6 +62,8 @@ alerts:
   critical_to: alerts        # CANCEL NOW / STATE MISMATCH / STOPPED / BLOCKED also -> TELEGRAM_TO_ALERTS
   weekly_to: digest          # Sunday R-factor review  -> TELEGRAM_TO_DIGEST
   approvals_to: approvals    # requests for Ed's decision -> TELEGRAM_TO_APPROVALS
+  syslog_to: syslog          # heartbeat, errors -> TELEGRAM_TO_SYSLOG (Ricky Logs / Systems)
+  heartbeat_minutes: 60      # one HEARTBEAT line to syslog per hour
 
 coverage:
   max_age_days: 7            # a symbol with an older engine run is not tradeable

@@ -105,6 +105,7 @@ hook, and a Hard Rules block in the README.
 
 - Stage 1 — auto-logon + power/update settings; find GARCH and CHoCH tasks: findings above; auto-logon to confirm.
 - Stage 2 — Telegram sender + Bitwarden sync + `trading` address book: **done 2 Sep** (test into the Crypto topic via `--to trading`).
-- Stage 3 — Binance key audit → Bitwarden items (`binance/readonly`, `binance/futures-trade`); `choch` code review (`choch_watch.py`, `choch_sizes.py`, `.choch-watch\{sizes,state,telegram}.json` — telegram.json is a third token copy, to be retired).
-- Stage 4 — Windows conversion of the scaffold (Task Scheduler XML, `install.ps1`), migrate `choch` → TS01 runner with reconciliation loop and the five replay tests.
-- Stage 5 — GitHub repo `Trading`, first push; Sunday programme exporting to `OneDrive\TRA`.
+- Stage 3 — Binance keys: `SERVER_RO` (Reading only) and `SERVER_TRADING_RW` (Reading + Futures), both IP-locked to 185.83.148.227, in Bitwarden folder `binance`: **done 2 Sep**. `SERVER_INVEST_RW` (options/margin) deferred. Read-only client `common/exchange/binance.py` with `--test` audit.
+- Stage 3b — `choch` code reviewed: engine verbatim, K=5, discount-only, sweep reclaim ≤4 bars, target = pivot A, no pool-consumed cancel, no funding. Bot token (in `telegram.json`) exposed in chat → rotated by Ed.
+- Stage 4 — **Runner v0 built 2 Sep night (v1.8)**: `common/engine/ict_base.py` (equivalence-tested), `common/data/binance_klines.py`, `src/runner.py` (PAPER, mode prefix, full paper lifecycle, SERVER_RO reconciliation read, holdings.json, JSONL log, heartbeat), `src/weekly.py` (Sunday programme, proposes tiers), Task Scheduler scripts `register-ts01-runner.ps1` / `register-ts01-weekly.ps1`. **Not yet installed on the PC** — see `MIGRATION.md` steps. Replay acceptance cases and pool-consumed cancel still to do.
+- Stage 5 — GitHub repo `github.com/edlefeuvre/Trading` created and pushed 2 Sep (first commit 6145b00, hook enforced on Windows). Sunday programme export to `OneDrive\TRA` still to wire.
