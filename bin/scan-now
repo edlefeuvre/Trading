@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+r"""bin/scan-now — what the engine sees RIGHT NOW, ignoring runner state.
+
+The runner deduplicates: a setup already announced is never announced again, so
+`runner --stdout --backfill N` legitimately prints nothing on a replay. This does
+not read or write results/state.json, sends no Telegram, and touches no exchange
+key — it pulls klines and runs common.engine.ict_base directly, so it answers
+"is detection working?" independently of what has already been reported.
+
+    python bin/scan-now                             # scanned universe, last 200 bars
+    python bin/scan-now --bars 400
+    python bin/scan-now --symbols DOGEUSDC,AVAXUSDC --bars 400
+    python bin/scan-now --strategy TS01_CHoCH_ICT_15m_Binance_USDCp
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from common.data import binance_klines as data          # noqa: E402
+from common.engine import ict_base as engine            # noqa: E402
+
+
+def load_yaml(p: Path):
+    import yaml
+    with open(p, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def ts(ms) -> str:
+    return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).strftime("%a %d %b %H:%M")
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--strategy", default="TS01_CHoCH_ICT_15m_Binance_USDCp")
+    ap.add_argument("--bars", type=int, default=200, help="report setups whose FVG bar is within this many bars of now")
+    ap.add_argument("--symbols", default="", help="comma list; default = every symbol with R factor > 0")
+    a = ap.parse_args(argv)
+
+    here = REPO / "strategies" / a.strategy
+    params = load_yaml(here / "config" / "params.yaml")
+    universe = load_yaml(here / "config" / "universe.yaml")
+    entry, structure, dcfg = params.get("entry", {}), params.get("structure", {}), params.get("data", {})
+    k = int(structure.get("pivot_k", engine.K))
+    live_bars = int(entry.get("gtc_window_bars", engine.LIVE_BARS))
+    sweep_reclaim = int(entry.get("sweep_reclaim_bars", engine.SWEEP_RECLAIM))
+    fvg_window = int(entry.get("gap_window_bars", engine.FVG_WINDOW))
+    discount_only = bool(entry.get("discount_only", True))
+    tf = str(params.get("timeframe", "15m"))
+    need = max(int(dcfg.get("history_bars", 1500)), a.bars + 200)
+
+    if a.symbols:
+        syms = [s.strip().upper() for s in a.symbols.split(",")]
+    else:
+        syms = [str(r["symbol"]).upper() for r in universe.get("symbols", [])
+                if isinstance(r, dict) and float(r.get("tier", 0) or 0) > 0]
+
+    print(f"scan-now · {a.strategy} · {tf} · k={k} reclaim={sweep_reclaim} fvg={fvg_window} "
+          f"window={live_bars} discount_only={discount_only}")
+    print(f"{len(syms)} symbol(s), setups with an FVG bar in the last {a.bars} bars\n")
+    total = 0
+    for sym in syms:
+        try:
+            bars = data.klines_paged(sym, need, interval=tf)
+        except Exception as e:  # noqa: BLE001
+            print(f"{sym:<14} ERROR {e}")
+            continue
+        n = len(bars)
+        evs = engine.live_state(bars, k=k, live_bars=live_bars, report_all=True,
+                                sweep_reclaim=sweep_reclaim, fvg_window=fvg_window,
+                                discount_only=discount_only)
+        recent = [e for e in evs if (n - 1) - e["fvg_bar"] <= a.bars]
+        print(f"{sym:<14} {n:>5} bars · {len(evs):>3} setup(s) in history · {len(recent)} in the last {a.bars}")
+        for e in recent:
+            total += 1
+            side = "SHORT" if e["d"] == -1 else "LONG "
+            extra = ""
+            if e["status"] == "closed":
+                extra = f"  {e['outcome']} {e['net_R']:+.2f}R  exit {ts(e['t_exit'])}"
+            elif e["status"] == "open":
+                extra = f"  unreal {e['unreal_R']:+.2f}R  filled {ts(e['t_filled'])}"
+            elif e["status"] in ("placed", "resting"):
+                extra = f"  {e['bars_left']} bar(s) left"
+            print(f"   {ts(e['t_placed'])}  {side} entry {e['mid']:<12g} stop {e['stop']:<12g} "
+                  f"target {e['target']:<12g} {e['poolR']:.2f}R  {e['status']}{extra}")
+    print(f"\n{total} setup(s) in the last {a.bars} bars across {len(syms)} symbol(s).")
+    print("Nothing here was sent anywhere; runner state was not read or written.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,47 @@
+# Who traded what. Key: <SYMBOL>@<fvg_bar_ms>. Status: Traded | Partial | Skipped | Untraded | Expired.
+# Skipped = a deliberate decision under a rule. Untraded = no decision taken. Expired = the
+# strategy's own order never filled, which is the strategy declining, not you.
+# bin/trade-report reads this; setups not listed default to Untraded (or Expired from the engine).
+
+1000PEPEUSDC@1788234300000:
+  note: Overnight; nobody at the desk.
+  status: Untraded
+AVAXUSDC@1788250500000:
+  note: Discarded by hand under the pool-consumed rule. The engine, which does not apply that rule, reached
+    target +1.34R.
+  status: Skipped
+AVAXUSDC@1788387300000:
+  chart: https://www.tradingview.com/x/d1jKXOlk/
+  note: LIVE from the runner ticket. Stop taken by the 01:00 candle and price held above. Full entry filed
+    separately.
+  status: Traded
+DOGEUSDC@1788233400000:
+  note: Overnight; nobody at the desk.
+  status: Untraded
+DOGEUSDC@1788387300000:
+  chart: https://www.tradingview.com/x/5OFzoYib/
+  note: LIVE from the runner ticket. Stop popped by about a pip, then the full move down. Full entry filed
+    separately.
+  status: Traded
+ETHUSDC@1788337800000:
+  note: Order placed then cancelled ~11:15 under the pool-consumed rule when 2,384.51 printed. The engine,
+    which does not apply that rule, reached target +1.87R.
+  status: Skipped
+LINKUSDC@1788187500000:
+  note: Alert seen 31 Aug 14:45; order never placed and the engine's own order never filled.
+  status: Expired
+LINKUSDC@1788250500000:
+  note: LIVE. Maker fill at 11.418, no drift. Stopped 14:12 at 11.512; price then fell to +1.09R. Actual
+    -1.031R, grade A.
+  status: Traded
+SOLUSDC@1788153300000:
+  note: Ticket rehearsed end to end on 31 Aug and never filled; the pool at 102.29 was consumed on the
+    signal candle. Correctly skipped, not a missed winner.
+  status: Expired
+UNIUSDC@1788171300000:
+  note: LIVE, outside the tested universe. Sell limit crossed and filled TAKER at 5.156185, re-basing
+    1R to $12.48; stopped 16:43. Actual -1.05R.
+  status: Traded
+XRPUSDC@1788233400000:
+  note: Overnight; nobody at the desk.
+  status: Untraded

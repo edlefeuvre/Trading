@@ -13,3 +13,4 @@ mirror/
 results/reports/
 strategies/*/results/holdings.json
 strategies/*/results/state.json
+strategies/*/results/trade-reports/

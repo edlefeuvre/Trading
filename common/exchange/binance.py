@@ -10,6 +10,7 @@ CLI (prints to YOUR console only; nothing leaves the machine except the signed r
     python -m common.exchange.binance --key SERVER_RO --test          # time, permissions, balances
     python -m common.exchange.binance --key SERVER_RO --restrictions  # what this key may do
     python -m common.exchange.binance --list
+    python -m common.exchange.binance --history AVAXUSDC --hours 48   # journal: orders, fills, trade ids
 """
 from __future__ import annotations
 
@@ -130,6 +131,58 @@ class Client:
             p["symbol"] = symbol
         return self._request(FAPI, "GET", "/fapi/v1/openAlgoOrders", p, signed=True)
 
+    # ---- history for the journal (read-only) -------------------------------
+    def history(self, symbol: str, hours: float = 48) -> dict:
+        """Everything the journal needs for one symbol: orders (basic), conditional (algo) orders,
+        fills with trade ids and maker/taker flags, and income rows. Each list is best-effort —
+        a failing endpoint leaves an 'errors' note rather than failing the whole call."""
+        start = int((time.time() - hours * 3600) * 1000)
+        out = {"symbol": symbol, "hours": hours, "orders": [], "algo_orders": [], "fills": [], "income": [], "errors": {}}
+        calls = {
+            "orders": ("/fapi/v1/allOrders", {"symbol": symbol, "startTime": start, "limit": 500}),
+            "algo_orders": ("/fapi/v1/allAlgoOrders", {"symbol": symbol, "startTime": start, "limit": 500}),
+            "fills": ("/fapi/v1/userTrades", {"symbol": symbol, "startTime": start, "limit": 1000}),
+            "income": ("/fapi/v1/income", {"symbol": symbol, "startTime": start, "limit": 500}),
+        }
+        for k, (path, params) in calls.items():
+            try:
+                out[k] = self._request(FAPI, "GET", path, params, signed=True)
+            except BinanceError as e:
+                out["errors"][k] = str(e)
+        return out
+
+
+def _ts(ms) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ms) / 1000)) + " UTC"
+
+
+def format_history(h: dict) -> str:
+    """Plain-text rendering of Client.history() for the journal."""
+    L = [f"== {h['symbol']} · last {h['hours']:g}h"]
+    L.append("\n-- orders (basic: limit / market / triggered stops) --")
+    for o in h["orders"]:
+        L.append(f"{_ts(o['time'])}  id {o['orderId']:<14} {o['side']:<4} {o['type']:<20} {o['status']:<16} "
+                 f"qty {float(o['origQty']):>10g} filled {float(o['executedQty']):>10g} price {float(o['price']):>10g} "
+                 f"avg {float(o.get('avgPrice', 0) or 0):>10g} stop {float(o.get('stopPrice', 0) or 0):>10g} {o.get('timeInForce', '')} "
+                 f"reduceOnly={o.get('reduceOnly')} workingType={o.get('workingType', '')}  updated {_ts(o['updateTime'])}")
+    L.append("\n-- conditional (algo) orders --")
+    for o in h["algo_orders"]:
+        L.append(f"{_ts(o['createTime'])}  algoId {o['algoId']:<12} {o['side']:<4} {o.get('orderType', ''):<20} {o.get('algoStatus', ''):<12} "
+                 f"qty {float(o.get('quantity') or 0):>10g} trigger {float(o.get('triggerPrice') or 0):>10g} price {float(o.get('price') or 0):>10g} "
+                 f"{o.get('workingType', '')} closePosition={o.get('closePosition')} triggeredOrderId={o.get('orderId') or o.get('triggerOrderId') or ''}"
+                 f"  updated {_ts(o.get('updateTime', o['createTime']))}")
+    L.append("\n-- fills (userTrades) --")
+    for t in h["fills"]:
+        L.append(f"{_ts(t['time'])}  trade {t['id']:<12} order {t['orderId']:<14} {t['side']:<4} qty {float(t['qty']):>10g} @ {float(t['price']):>10g} "
+                 f"quote {float(t['quoteQty']):>10.2f} fee {float(t['commission']):.6f} {t['commissionAsset']} {'MAKER' if t['maker'] else 'TAKER'} "
+                 f"realizedPnl {float(t['realizedPnl']):+.4f}")
+    L.append("\n-- income --")
+    for r in h["income"]:
+        L.append(f"{_ts(r['time'])}  {r['incomeType']:<14} {float(r['income']):+.6f} {r['asset']}  {r.get('info', '')}")
+    for k, e in h["errors"].items():
+        L.append(f"\n({k}: not available — {e})")
+    return "\n".join(L)
+
 
 def _fmt_restrictions(r: dict) -> str:
     keys = ["ipRestrict", "enableReading", "enableFutures", "enableSpotAndMarginTrading",
@@ -154,8 +207,15 @@ def main(argv=None) -> int:
     g.add_argument("--test", action="store_true", help="time sync, restrictions, balances, positions, open orders")
     g.add_argument("--restrictions", action="store_true")
     g.add_argument("--list", action="store_true")
+    g.add_argument("--history", metavar="SYMBOL", help="orders, conditional orders, fills (trade ids) and income for one symbol")
+    ap.add_argument("--hours", type=float, default=48, help="lookback for --history (default 48)")
     a = ap.parse_args(argv)
     try:
+        if a.history:
+            c = Client(a.key)
+            c.sync_time()
+            print(format_history(c.history(a.history.upper(), a.hours)))
+            return 0
         if a.list:
             print(f"config dir: {CONFIG_DIR}")
             print("\n".join(list_keys()) or "(no *.env files)")
