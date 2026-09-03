@@ -55,6 +55,29 @@ def test_matching_recognises_entry_position_and_stop(env):
     assert "your position" in line and "matches this ticket" in line and "stop on exchange" in line
 
 
+def test_conditional_stop_counts_as_a_stop(env):
+    """Ed's stop sits in Binance's Conditional tab (algo order service): last-price trigger, close-all, qty 0."""
+    T, side, opp = env["T"], env["side"], env["opp"]
+    snap = {"positions": [{"symbol": "SYMA", "qty": -T.qty if side == "SELL" else T.qty, "entry": T.price, "mark": T.price, "uPnl": 0.0}],
+            "open_orders": [{"symbol": "SYMA", "side": opp, "type": "STOP_MARKET", "qty": 0.0, "price": 0.0, "stop": T.sl_trigger,
+                             "id": 2148627, "algo": True, "working": "last", "close_all": True}],
+            "conditional_ok": True}
+    m = runner.matching(snap, "SYMA", side, T.price, T.sl_trigger, T.tp_limit)
+    assert m["stop_orders"] and m["stop_orders"][0]["algo"]
+    assert "stop on exchange (last trigger)" in runner.exchange_line(snap, "SYMA", m)
+    _run(env, snap)
+    assert not [t for _, t in env["sent"] if "NO STOP" in t]
+
+
+def test_no_alert_when_conditional_orders_unreadable(env):
+    T, side = env["T"], env["side"]
+    snap = {"positions": [{"symbol": "SYMA", "qty": -T.qty if side == "SELL" else T.qty, "entry": T.price, "mark": T.price, "uPnl": 0.0}],
+            "open_orders": [], "conditional_ok": False}
+    _run(env, snap)
+    assert not [t for _, t in env["sent"] if "NO STOP" in t]
+    assert [t for _, t in env["sent"] if "stop unknown" in t]
+
+
 def test_no_stop_alert_goes_to_alerts_topic(env):
     T, side = env["T"], env["side"]
     snap = {"positions": [{"symbol": "SYMA", "qty": -T.qty if side == "SELL" else T.qty, "entry": T.price, "mark": T.price, "uPnl": -1.0}],

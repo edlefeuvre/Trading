@@ -117,7 +117,18 @@ class Client:
                              {"symbol": symbol, "orderId": int(order_id)}, signed=True)
 
     def open_orders(self, symbol: str | None = None) -> list[dict]:
+        """Basic open orders (LIMIT, MARKET-pending). Conditional orders are NOT here — see open_algo_orders."""
         return self._request(FAPI, "GET", "/fapi/v1/openOrders", {"symbol": symbol} if symbol else None, signed=True)
+
+    def open_algo_orders(self, symbol: str | None = None) -> list[dict]:
+        """Conditional orders — Binance's 'Conditional' tab: STOP_MARKET, TAKE_PROFIT_MARKET, STOP,
+        TAKE_PROFIT, TRAILING_STOP_MARKET. Since Binance moved these to its Algo Order service they no
+        longer appear in /fapi/v1/openOrders. Fields: algoId, orderType, quantity, triggerPrice, price,
+        workingType (MARK_PRICE | CONTRACT_PRICE), reduceOnly, closePosition."""
+        p = {"algoType": "CONDITIONAL"}
+        if symbol:
+            p["symbol"] = symbol
+        return self._request(FAPI, "GET", "/fapi/v1/openAlgoOrders", p, signed=True)
 
 
 def _fmt_restrictions(r: dict) -> str:
@@ -166,9 +177,15 @@ def main(argv=None) -> int:
         for p in pos:
             print(f"  {p['symbol']:<14} qty {float(p['positionAmt']):>+12.4f}  entry {float(p['entryPrice']):>12.4f}  mark {float(p['markPrice']):>12.4f}  uPnl {float(p['unRealizedProfit']):>+10.4f}  {p.get('marginType','')} {p.get('leverage','')}x")
         oo = c.open_orders()
-        print(f"open orders: {len(oo)}")
+        print(f"open orders (basic): {len(oo)}")
         for o in oo:
             print(f"  {o['symbol']:<14} {o['side']:<5} {o['type']:<12} qty {float(o['origQty']):>10.4f}  price {float(o['price']):>12.4f}  stop {float(o.get('stopPrice',0)):>12.4f}  {o.get('timeInForce','')}  id {o['orderId']}")
+        ao = c.open_algo_orders()
+        print(f"open orders (conditional): {len(ao)}")
+        for o in ao:
+            wt = "mark" if o.get("workingType") == "MARK_PRICE" else "last"
+            cp = "  close-all" if str(o.get("closePosition")).lower() == "true" else ""
+            print(f"  {o['symbol']:<14} {o['side']:<5} {o['orderType']:<18} qty {float(o.get('quantity') or 0):>10.4f}  price {float(o.get('price') or 0):>12.4f}  trigger {float(o.get('triggerPrice') or 0):>12.4f} ({wt})  algoId {o['algoId']}{cp}")
         return 0
     except BinanceError as e:
         print(f"ERROR: {e}", file=sys.stderr)

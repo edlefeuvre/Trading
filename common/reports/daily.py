@@ -116,6 +116,18 @@ def exchange_block(book: dict, strats: list[dict]) -> tuple[list[str], list[str]
         pos = c.positions(); oo = c.open_orders(); inc = c.income(hours)
     except Exception as e:  # noqa: BLE001
         return [rule("Binance"), f"read failed: {str(e)[:60]}"], [], {"error": str(e)[:200]}
+    # Conditional orders (Binance's "Conditional" tab) come from the Algo Order service; fold them into
+    # the same list in the basic-order shape so the rest of the block reads both alike.
+    try:
+        for o in c.open_algo_orders():
+            oo.append({"symbol": o["symbol"], "side": o["side"], "type": o.get("orderType", ""),
+                       "origQty": o.get("quantity") or 0, "price": o.get("price") or 0,
+                       "stopPrice": o.get("triggerPrice") or 0, "orderId": o["algoId"],
+                       "workingType": o.get("workingType", ""), "closePosition": o.get("closePosition")})
+    except Exception as e:  # noqa: BLE001
+        oo_note = f"conditional orders not readable: {str(e)[:50]}"
+    else:
+        oo_note = ""
 
     setups = announced_setups(strats, days)
     data = {"hours": hours, "wallet": {}, "positions": [], "orders": [], "by_symbol": []}
@@ -141,15 +153,19 @@ def exchange_block(book: dict, strats: list[dict]) -> tuple[list[str], list[str]
         if tag == "—":
             outside.append(dict(kind="position", symbol=p["symbol"], detail=f"{side.strip()} {abs(qty):g} @ {entry:g} · uPnL {fnum(float(p['unRealizedProfit']))}", tag="—"))
     lines.append("Open orders" if oo else "Open orders none")
+    if oo_note:
+        lines.append(f" ⚠ {oo_note}")
     for o in oo[:10]:
         kind = {"LIMIT": "LIM", "STOP_MARKET": "SL ", "STOP": "SL ", "TAKE_PROFIT": "TP ", "TAKE_PROFIT_MARKET": "TP "}.get(o["type"], o["type"][:3])
         price = float(o["price"]) or float(o.get("stopPrice", 0))
         tag = attribute(o["symbol"], o["side"], price, setups, tol) or "—"
-        row = f" {o['symbol']:<9}{o['side']:<4} {kind} {float(o['origQty']):>7g} @{price:g} [{tag}]"
+        qty_s = "all" if str(o.get("closePosition", "")).lower() == "true" else f"{float(o['origQty']):g}"
+        trig = " (last)" if o.get("workingType") == "CONTRACT_PRICE" else ""
+        row = f" {o['symbol']:<9}{o['side']:<4} {kind} {qty_s:>7} @{price:g}{trig} [{tag}]"
         lines.append(row)
-        data["orders"].append(dict(symbol=o["symbol"], side=o["side"], type=kind.strip(), qty=float(o["origQty"]), price=price, tag=tag))
+        data["orders"].append(dict(symbol=o["symbol"], side=o["side"], type=kind.strip() + trig, qty=qty_s, price=price, tag=tag))
         if tag == "—":
-            outside.append(dict(kind="order", symbol=o["symbol"], detail=f"{o['side']} {kind.strip()} {float(o['origQty']):g} @ {price:g}", tag="—"))
+            outside.append(dict(kind="order", symbol=o["symbol"], detail=f"{o['side']} {kind.strip()} {qty_s} @ {price:g}{trig}", tag="—"))
     if len(oo) > 10:
         lines.append(f" … {len(oo) - 10} more")
 
@@ -254,7 +270,7 @@ def html_statement(stamp: str, mode: str, book: dict, strats: list[dict], ex: di
         if ex["orders"]:
             parts.append("<table><tr><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>Strategy</th></tr>")
             for o in ex["orders"]:
-                parts.append(f"<tr><td>{o['symbol']}</td><td>{o['side']}</td><td>{o['type']}</td><td>{o['qty']:g}</td><td>{o['price']:g}</td><td>{tagcell(o['tag'])}</td></tr>")
+                parts.append(f"<tr><td>{o['symbol']}</td><td>{o['side']}</td><td>{o['type']}</td><td>{o['qty']}</td><td>{o['price']:g}</td><td>{tagcell(o['tag'])}</td></tr>")
             parts.append("</table>")
         else:
             parts.append("<p class='sub'>none</p>")

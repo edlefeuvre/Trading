@@ -33,7 +33,7 @@ from common.alerts import telegram
 from common.data import binance_klines as data
 from common.engine import ict_base as engine
 
-__version__ = "1.11"
+__version__ = "1.12"
 HERE = Path(__file__).resolve().parent.parent           # strategy folder
 REPO = HERE.parent.parent
 SLUG = HERE.name
@@ -135,9 +135,24 @@ def exchange_snapshot(params) -> dict | None:
                            "mark": float(p["markPrice"]), "uPnl": float(p["unRealizedProfit"]),
                            "margin": p.get("marginType"), "leverage": p.get("leverage")} for p in c.positions()],
             "open_orders": [{"symbol": o["symbol"], "side": o["side"], "type": o["type"], "qty": float(o["origQty"]),
-                             "price": float(o["price"]), "stop": float(o.get("stopPrice", 0)), "id": o["orderId"]}
+                             "price": float(o["price"]), "stop": float(o.get("stopPrice", 0)), "id": o["orderId"],
+                             "algo": False, "working": "", "close_all": False}
                             for o in c.open_orders()],
         }
+        # Conditional orders (Binance's "Conditional" tab: stop-market, take-profit …) live in the Algo
+        # Order service, not in openOrders. Same shape, so matching() treats both alike.
+        try:
+            snap["open_orders"] += [
+                {"symbol": o["symbol"], "side": o["side"], "type": o.get("orderType", ""),
+                 "qty": float(o.get("quantity") or 0), "price": float(o.get("price") or 0),
+                 "stop": float(o.get("triggerPrice") or 0), "id": o["algoId"], "algo": True,
+                 "working": "mark" if o.get("workingType") == "MARK_PRICE" else "last",
+                 "close_all": str(o.get("closePosition", "")).lower() == "true"}
+                for o in c.open_algo_orders()]
+            snap["conditional_ok"] = True
+        except Exception as e:  # noqa: BLE001 — never claim NO STOP when we could not see the stops
+            snap["conditional_ok"] = False
+            log_line({"event": "algo_orders_failed", "error": str(e)})
         out = HERE / "results" / "holdings.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         json.dump(snap, open(out, "w", encoding="utf-8"), indent=1)
@@ -195,7 +210,13 @@ def exchange_line(snap: dict | None, sym: str, m: dict | None = None) -> str:
             bits.append(f"your order {o['id']} · {o['qty']:g} @ {o['price']:g}")
         guard = []
         if m["position"]:
-            guard.append("stop on exchange" if m["stop_orders"] else "⚠ NO STOP ON EXCHANGE")
+            if m["stop_orders"]:
+                w = m["stop_orders"][0].get("working")
+                guard.append("stop on exchange" + (f" ({w} trigger)" if w else ""))
+            elif snap.get("conditional_ok") is False:
+                guard.append("stop unknown (conditional orders not readable this cycle)")
+            else:
+                guard.append("⚠ NO STOP ON EXCHANGE")
             guard.append("target on exchange" if m["target_orders"] else "no target order")
         return "exchange: " + ", ".join(bits) + " — matches this ticket" + (f" · {' · '.join(guard)}" if guard else "")
     parts = []
@@ -379,7 +400,8 @@ def cycle(params, tiers, mode: str, a) -> dict:
             m = matching(snap, sym, side, T.price, T.sl_trigger, T.tp_limit)
 
             # ---- guards on Ed's real orders (read-only unless manage.auto_cancel_expired) ----
-            if m["position"] and manage.get("check_missing_stop", True) and not m["stop_orders"]:
+            stops_visible = bool(snap) and snap.get("conditional_ok", True)   # never alert on what we could not read
+            if m["position"] and manage.get("check_missing_stop", True) and not m["stop_orders"] and stops_visible:
                 wkey = f"{key}:nostop:{int(time.time() // 900)}"      # at most once per cycle
                 if not st.get(wkey):
                     p = m["position"]

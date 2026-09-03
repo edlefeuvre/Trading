@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.11
+version: 1.12
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -401,6 +401,7 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-03 | 1.12 | §5 | Reconciliation now reads Binance's Conditional orders (Algo Order service, `/fapi/v1/openAlgoOrders`) as well as basic orders: a stop-market/take-profit in the Conditional tab counts as the ticket's stop/target (first live case: AVAX stop was there, runner said NO STOP). Exchange line names the trigger type (`stop on exchange (last trigger)`); when conditional orders cannot be read the runner says `stop unknown` and never alerts NO STOP. Daily statement lists conditional orders too (`all` for close-position stops). | `src/runner.py`, `common/exchange/binance.py`, `common/reports/daily.py`, `src/tests/test_guards.py` |
 | 2026-09-03 | 1.11 | §3, §5 | Runner recognises Ed's exchange orders/positions that match a ticket (`your order … matches this ticket`). Optional `manage.auto_cancel_expired`: cancels a matching unfilled entry once the 32-bar window passes (SERVER_TRADING_RW; cancel is the only write in the codebase). `manage.check_missing_stop`: alerts while a matching position has no stop order. Positions are never time-expired — they exit by stop or target. | `src/runner.py`, `common/exchange/binance.py`, `config/params.yaml`, `src/tests/test_guards.py` |
 | 2026-09-03 | 1.10 | §6, §8 | Runner records each announced setup's side/entry/stop/target in `results/state.json` so the book-level daily report (`common/reports/daily.py`, task `TRADING-daily`, 07:00, Digest) can attribute exchange positions and orders to TS01 and flag OUTSIDE STRATEGIES items; the report is a short Telegram summary plus an attached HTML statement (also exported to `OneDrive\TRA\30_Reports`). Tickets now sent as monospace HTML blocks. `binance.income()` added. Book-level settings in `config/book.yaml`. | `src/runner.py`, `common/reports/daily.py`, `common/exchange/binance.py`, `common/alerts/telegram.py`, `config/book.yaml`, `deploy/windows/register-daily-report.ps1` |
 | 2026-09-03 | 1.9 | §3, §5 | Every notification now carries a Binance-form ticket block (Order / Price / Size / Take Profit trigger→Limit / Stop Loss trigger→Market, reduce-only, margin, leverage) with price and size rounded to the symbol's real tick and lot size from exchangeInfo (cached daily). `orders.*` parameters added. | `src/runner.py`, `common/data/binance_klines.py`, `config/params.yaml` |
