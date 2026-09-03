@@ -44,19 +44,20 @@ def test_cycle_sends_prefixed_messages_and_dedupes(sandbox):
     setups = [t for _, t in sent if "· SETUP ·" in t]
     assert len(setups) == 2, [t.splitlines()[0] for _, t in sent]
     for to, text in sent:
-        head = text.splitlines()[0]
-        assert head.startswith("PAPER · ") and head.endswith("· TS01"), head
+        head = text.splitlines()[1] if "HEARTBEAT" not in text else text.splitlines()[0]
+        assert head.startswith("PAPER · ") and "· TS01" in head, head
     for text in setups:
-        assert "tier 1 × $20.00" in text and "exchange  not checked" in text
-        assert "── Binance ticket" in text and "Take Profit  trigger" in text and "Stop Loss    trigger" in text
-        assert "→ Market" in text and "both reduce-only · isolated · ≤ 20x" in text
-        price = [l for l in text.splitlines() if l.startswith("Price")][0].split()[1]
+        assert "R: 1xCaR = $20.00" in text and "exchange: not checked" in text
+        assert "(limit, maker, post-only)" in text and "mark → market)" in text
+        order = [l.split(":")[0] for l in text.splitlines() if l.split(":")[0] in ("Price", "Size", "TProfit", "StopL")]
+        assert order == ["Price", "Size", "TProfit", "TProfit", "StopL"], order
+        price = [l for l in text.splitlines() if l.startswith("Price:")][0].split()[1]
         assert len(price.split(".")[1]) == 2, price          # rounded to the 0.01 tick
-        tp = [l for l in text.splitlines() if l.startswith("Take Profit")][0].split()
-        trig, limit = float(tp[3]), float(tp[7])
-        long = " LONG " in text
+        tps = [l.split()[1] for l in text.splitlines() if l.startswith("TProfit:")]
+        trig, limit = float(tps[0]), float(tps[1])
+        long = text.splitlines()[3].endswith("· LONG")
         assert (trig > float(price)) == long and (limit > float(price)) == long, "TP trigger/limit on the profit side"
-        size = [l for l in text.splitlines() if l.startswith("Size")][0].split()[1]
+        size = [l for l in text.splitlines() if l.startswith("Size:")][0].split()[1]
         assert len(size.split(".")[1]) == 3, size            # rounded to the 0.001 step
     assert (here / "results" / "state.json").is_file()
     n_first = len(sent)
@@ -64,7 +65,8 @@ def test_cycle_sends_prefixed_messages_and_dedupes(sandbox):
     _run("SYMA,SYMB,SYMC", backfill=400)
     closes = [t for _, t in sent[n_first:] if "STOPPED (paper)" in t or "TARGET HIT (paper)" in t]
     assert len(closes) == 2, [t.splitlines()[0] for _, t in sent[n_first:]]
-    assert all("result " in t and "── Binance ticket" in t for t in closes)
+    assert all("Result:" in t and "Price:" in t for t in closes)
+    assert all("Expires: " in t for _, t in sent if "· SETUP ·" in t)
     n_second = len(sent)
     # cycle 3: nothing new
     _run("SYMA,SYMB,SYMC", backfill=400)

@@ -3,7 +3,8 @@ r"""common.exchange.binance — minimal signed client for Binance USDC-margined 
 Credentials: one env file per key under the provider folder, by name:
     %USERPROFILE%\.config\binance\<name>.env     BINANCE_KEY=...  BINANCE_SECRET=...
 A strategy names its key in params.yaml (credentials.exchange: binance/SERVER_TRADING_RW).
-No third-party packages. Nothing here places orders yet.
+No third-party packages. The ONLY write this client can do is cancel_order(); nothing here
+places, amends or closes anything.
 
 CLI (prints to YOUR console only; nothing leaves the machine except the signed requests):
     python -m common.exchange.binance --key SERVER_RO --test          # time, permissions, balances
@@ -69,8 +70,8 @@ class Client:
             qs = urllib.parse.urlencode(params)
             params["signature"] = hmac.new(self.secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
         qs = urllib.parse.urlencode(params)
-        url = f"{base}{path}" + (f"?{qs}" if qs and method == "GET" else "")
-        data = qs.encode() if method != "GET" and qs else None
+        url = f"{base}{path}" + (f"?{qs}" if qs and method in ("GET", "DELETE") else "")
+        data = qs.encode() if method not in ("GET", "DELETE") and qs else None
         req = urllib.request.Request(url, data=data, method=method,
                                      headers={"X-MBX-APIKEY": self.key, "User-Agent": "trading-server/0.1"})
         try:
@@ -99,6 +100,21 @@ class Client:
     def positions(self) -> list[dict]:
         return [p for p in self._request(FAPI, "GET", "/fapi/v2/positionRisk", signed=True)
                 if float(p.get("positionAmt", 0)) != 0]
+
+    def income(self, hours: int = 24, income_type: str | None = None) -> list[dict]:
+        """Income history for the last `hours`: REALIZED_PNL, COMMISSION, FUNDING_FEE, ... (max 1000 rows)."""
+        start = int((time.time() - hours * 3600) * 1000)
+        params = {"startTime": start, "limit": 1000}
+        if income_type:
+            params["incomeType"] = income_type
+        return self._request(FAPI, "GET", "/fapi/v1/income", params, signed=True)
+
+    # ---- the one write in this codebase: cancel an order ------------------
+    def cancel_order(self, symbol: str, order_id: int) -> dict:
+        """Cancel one order by id. Needs a key with Futures permission (SERVER_TRADING_RW).
+        Cancelling can only remove risk; nothing in this module places, amends or closes."""
+        return self._request(FAPI, "DELETE", "/fapi/v1/order",
+                             {"symbol": symbol, "orderId": int(order_id)}, signed=True)
 
     def open_orders(self, symbol: str | None = None) -> list[dict]:
         return self._request(FAPI, "GET", "/fapi/v1/openOrders", {"symbol": symbol} if symbol else None, signed=True)

@@ -10,5 +10,6 @@ __pycache__/
 .pytest_cache/
 mirror/
 *.pyc
+results/reports/
 strategies/*/results/holdings.json
 strategies/*/results/state.json

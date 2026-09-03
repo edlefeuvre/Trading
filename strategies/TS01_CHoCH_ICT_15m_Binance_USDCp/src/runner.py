@@ -33,7 +33,7 @@ from common.alerts import telegram
 from common.data import binance_klines as data
 from common.engine import ict_base as engine
 
-__version__ = "1.9"
+__version__ = "1.11"
 HERE = Path(__file__).resolve().parent.parent           # strategy folder
 REPO = HERE.parent.parent
 SLUG = HERE.name
@@ -147,21 +147,63 @@ def exchange_snapshot(params) -> dict | None:
         return {"error": str(e)}
 
 
-def exchange_line(snap: dict | None, sym: str) -> str:
+TOL_PCT = 0.15   # price tolerance (%) for matching an exchange order/position to a ticket
+
+
+def _near(a: float, b: float) -> bool:
+    return bool(a and b) and abs(a - b) / b * 100 <= TOL_PCT
+
+
+def matching(snap: dict | None, sym: str, side: str, entry: float, stop: float | None, target: float | None) -> dict:
+    """Ed's exchange items that match this ticket: entry order(s), position, stop order(s), target order(s).
+    Read-only; used to tell the truth in the exchange line and to guard a position without a stop."""
+    out = {"entry_orders": [], "position": None, "stop_orders": [], "target_orders": []}
+    if not snap or "error" in snap:
+        return out
+    opp = "BUY" if side == "SELL" else "SELL"
+    for o in snap["open_orders"]:
+        if o["symbol"] != sym:
+            continue
+        price = o["price"] or o["stop"]
+        if o["side"] == side and o["type"] == "LIMIT" and _near(price, entry):
+            out["entry_orders"].append(o)
+        elif o["side"] == opp and stop and _near(o["stop"] or price, stop):
+            out["stop_orders"].append(o)
+        elif o["side"] == opp and target and (_near(price, target) or _near(o["stop"], target)):
+            out["target_orders"].append(o)
+    for p in snap["positions"]:
+        if p["symbol"] == sym and ((p["qty"] < 0) == (side == "SELL")) and _near(p["entry"], entry):
+            out["position"] = p
+    return out
+
+
+def exchange_line(snap: dict | None, sym: str, m: dict | None = None) -> str:
     if snap is None:
-        return "exchange  not checked (no SERVER_RO key)"
+        return "exchange: not checked (no SERVER_RO key)"
     if "error" in snap:
-        return f"exchange  read failed: {snap['error'][:80]}"
+        return f"exchange: read failed — {snap['error'][:60]}"
     pos = [p for p in snap["positions"] if p["symbol"] == sym]
     oo = [o for o in snap["open_orders"] if o["symbol"] == sym]
     if not pos and not oo:
-        return f"exchange  no position, no orders in {sym}  (paper only)"
+        return f"exchange: nothing in {sym} (paper only)"
+    if m and (m["position"] or m["entry_orders"]):
+        bits = []
+        if m["position"]:
+            p = m["position"]
+            bits.append(f"your position {p['qty']:+g} @ {p['entry']:g} (uPnL {p['uPnl']:+.2f})")
+        for o in m["entry_orders"]:
+            bits.append(f"your order {o['id']} · {o['qty']:g} @ {o['price']:g}")
+        guard = []
+        if m["position"]:
+            guard.append("stop on exchange" if m["stop_orders"] else "⚠ NO STOP ON EXCHANGE")
+            guard.append("target on exchange" if m["target_orders"] else "no target order")
+        return "exchange: " + ", ".join(bits) + " — matches this ticket" + (f" · {' · '.join(guard)}" if guard else "")
     parts = []
     if pos:
         parts.append(f"position {pos[0]['qty']:+g} @ {pos[0]['entry']:g}")
     if oo:
-        parts.append(f"{len(oo)} open order(s)")
-    return "exchange  " + ", ".join(parts) + "  — NOT placed by this runner (PAPER)"
+        parts.append(f"{len(oo)} open order{'s' if len(oo) > 1 else ''}")
+    return "exchange: " + ", ".join(parts) + " — does not match this ticket"
 
 
 # ------------------------------------------------------------ messages ----
@@ -212,45 +254,70 @@ class Ticket:
         return data.fmt_inc(x, self.step)
 
     def block(self) -> list[str]:
-        tp_trig = f"trigger {self.p(self.tp_trigger)} {self.trigger}  → " if self.tp_trigger else ""
-        sl_tail = (f"→ Limit {self.p(self.sl_limit)}" if self.sl_limit is not None else "→ Market")
-        return [
-            "── Binance ticket ────────────────────",
-            f"Order        Limit · {self.side} · {'Post-Only · ' if self.post_only else ''}{self.tif}",
-            f"Price        {self.p(self.price)}",
-            f"Size         {self.q(self.qty)} {self.base}        (≈ ${self.notional:,.0f})",
-            f"Take Profit  {tp_trig}Limit {self.p(self.tp_limit)}",
-            f"Stop Loss    trigger {self.p(self.sl_trigger)} {self.trigger}  {sl_tail}",
-            f"             {'both reduce-only · ' if self.reduce_only else ''}{self.margin} · ≤ {self.lev}x",
-            "─────────────────────────────────────",
-        ]
+        """Ed's layout (3 Sep 2026): one field per line in the order of the Binance form."""
+        trig = self.trigger.lower()
+        sl_kind = f"limit {self.p(self.sl_limit)}" if self.sl_limit is not None else "market"
+        lines = [f"Price:   {self.p(self.price)}  (limit, maker{', post-only' if self.post_only else ''})",
+                 f"Size:    {self.q(self.qty)} {self.base}"]
+        if self.tp_trigger:
+            lines.append(f"TProfit: {self.p(self.tp_trigger)}  (trigger, {trig})")
+        lines.append(f"TProfit: {self.p(self.tp_limit)}  (price)")
+        lines.append(f"StopL:   {self.p(self.sl_trigger)}  ({self.tk['stop_pct']:.2f}%, {trig} → {sl_kind})")
+        return lines
 
-    def footer(self) -> str:
+    def footer(self) -> list[str]:
         tk = self.tk
-        rounding = "" if abs(self.risk_usd_actual - self.tier * self.cap) < 0.005 else f" → ${self.risk_usd_actual:,.2f} after lot rounding"
-        return (f"stop {tk['stop_pct']:.2f}% · pool {tk['poolR']:.2f} R{'' if tk['poolR'] >= 1 else ' [!] < 1R'} · "
-                f"risk ${self.tier * self.cap:,.2f} (tier {self.tier:g} × ${self.cap:,.2f}){rounding}")
+        rounding = "" if abs(self.risk_usd_actual - self.tier * self.cap) < 0.005 else f"  (${self.risk_usd_actual:,.2f} after lot rounding)"
+        return [f"Notional: ${self.notional:,.0f}",
+                f"R: {self.tier:g}xCaR = ${self.tier * self.cap:,.2f}{rounding}",
+                f"Pool: {tk['poolR']:.2f} R{'' if tk['poolR'] >= 1 else '   [!] pool < 1R'}"]
 
 
 def render(mode: str, event: str, t: Ticket, snap: dict | None, extra: list[str] | None = None,
-           with_ticket: bool = True) -> str:
+           with_ticket: bool = True, m: dict | None = None) -> str:
+    """Plain text in Ed's order: time, mode/event/strategy, symbol, form fields, risk, notes, exchange."""
     tk = t.tk
-    lines = [f"{mode} · {event} · {TS}",
-             f"{t.sym} perp · {t.pos} · 15m · signal {when(tk['t_placed'])}", ""]
+    lines = [when(tk["t_placed"]),
+             f"{mode} · {event} · {TS} · 15m",
+             "",
+             f"{t.sym} · {t.pos}"]
     if with_ticket:
         lines += t.block()
-    lines.append(t.footer())
+    lines += [""] + t.footer()
     if extra:
-        lines += extra
-    lines += ["", exchange_line(snap, t.sym)]
+        lines += [""] + extra
+    lines += ["", exchange_line(snap, t.sym, m)]
     return "\n".join(lines)
+
+
+def short(mode: str, event: str, t: Ticket, body: list[str]) -> str:
+    """A notice without the full ticket: time, header, symbol, then the body lines."""
+    return "\n".join([when(t.tk["t_placed"]), f"{mode} · {event} · {TS} · 15m", "", f"{t.sym} · {t.pos}"] + body)
+
+
+def cancel_entry_order(params: dict, sym: str, order_id: int) -> dict:
+    """The runner's only write to the exchange: cancel one of Ed's entry orders that matches a
+    ticket whose window has passed. Uses the trading key named in credentials.exchange."""
+    from common.exchange import binance
+    rw = str(params.get("credentials", {}).get("exchange", "binance/SERVER_TRADING_RW")).split("/")[-1]
+    if rw not in binance.list_keys():
+        raise RuntimeError(f"{rw}.env not present — cannot cancel; do it by hand")
+    c = binance.Client(rw)
+    c.sync_time()
+    return c.cancel_order(sym, order_id)
+
+
+def gtc_line(tk: dict, live_bars: int, bar_ms: int = 900_000) -> str:
+    return "Expires: " + dt.datetime.fromtimestamp((tk["t_placed"] + live_bars * bar_ms) / 1000, TZ).strftime("%a %d %b %H:%M UTC")
 
 
 # --------------------------------------------------------------- cycle ----
 def cycle(params, tiers, mode: str, a) -> dict:
     alerts = params.get("alerts", {})
+    manage = params.get("manage", {})
     book = alerts.get("book", "trading")
     to_main = alerts.get("to", "trading")
+    to_crit = alerts.get("critical_to", "alerts")
     to_sys = alerts.get("syslog_to", "syslog")
     hb_min = int(alerts.get("heartbeat_minutes", 60))
 
@@ -271,12 +338,14 @@ def cycle(params, tiers, mode: str, a) -> dict:
     filters = data.symbol_filters()
     if not filters:
         errors.append("exchangeInfo unavailable: prices/sizes shown unrounded")
-    def emit(text: str, to: str = to_main):
+    import re as _re
+
+    def emit(text: str, to: str = to_main, html: bool = False):
         if a.stdout:
-            print(text + "\n" + "-" * 40)
+            print(text + "\n" + "-" * 34)
             return
         try:
-            telegram.send(text, to=to, book=book)
+            telegram.send(text, to=to, book=book, html=html)
         except telegram.TelegramError as e:
             errors.append(f"telegram: {e}")
             print(text, file=sys.stderr)
@@ -304,20 +373,60 @@ def cycle(params, tiers, mode: str, a) -> dict:
             status = tk["status"]
 
             T = Ticket(params, filters, sym, tk, risk_usd, tier, cap)
+            side = "SELL" if tk["d"] == -1 else "BUY"
+            record = dict(sym=sym, side=side, entry=T.price, stop=T.sl_trigger,
+                          target=T.tp_limit, qty=T.qty, t=tk["t_placed"], ts=TS)   # what a report needs to recognise Ed's order
+            m = matching(snap, sym, side, T.price, T.sl_trigger, T.tp_limit)
+
+            # ---- guards on Ed's real orders (read-only unless manage.auto_cancel_expired) ----
+            if m["position"] and manage.get("check_missing_stop", True) and not m["stop_orders"]:
+                wkey = f"{key}:nostop:{int(time.time() // 900)}"      # at most once per cycle
+                if not st.get(wkey):
+                    p = m["position"]
+                    emit(short(mode, "⚠ NO STOP ON EXCHANGE", T,
+                               [f"your position {p['qty']:+g} @ {p['entry']:g} has no stop order.",
+                                f"Ticket stop: {T.p(T.sl_trigger)}  ({T.trigger.lower()} → market). Place it now."]), to=to_crit)
+                    st[wkey] = True; sent.append(f"NOSTOP {sym}")
+            window_passed = age >= live_bars
+            if m["entry_orders"] and not m["position"] and window_passed:
+                for o in m["entry_orders"]:
+                    if manage.get("auto_cancel_expired", False):
+                        ckey = f"{key}:cancelled:{o['id']}"
+                        if st.get(ckey):
+                            continue
+                        try:
+                            cancel_entry_order(params, sym, o["id"])
+                            emit(short(mode, "CANCELLED (auto)", T,
+                                       [f"your order {o['id']} · {o['qty']:g} @ {o['price']:g} cancelled —",
+                                        f"window of {live_bars} bars passed unfilled."]))
+                            st[ckey] = True; sent.append(f"CANCELLED {sym}")
+                            log_line({"event": "auto_cancel", "symbol": sym, "order_id": o["id"]})
+                        except Exception as e:  # noqa: BLE001
+                            errors.append(f"cancel {sym} {o['id']}: {e}")
+                            emit(short(mode, "⚠ CANCEL FAILED", T, [f"order {o['id']}: {str(e)[:120]}", "Cancel it by hand."]), to=to_crit)
+                    else:
+                        xkey = f"{key}:cancelnow:{o['id']}"
+                        if not st.get(xkey):
+                            emit(short(mode, "CANCEL NOW", T,
+                                       [f"your order {o['id']} · {o['qty']:g} @ {o['price']:g} is still resting",
+                                        f"after the {live_bars}-bar window. Cancel it.",
+                                        "(manage.auto_cancel_expired: true lets the runner do this)"]), to=to_crit)
+                            st[xkey] = True; sent.append(f"CANCELNOW {sym}")
+
             if status == "placed" or (a.backfill and age <= a.backfill and not announced and status != "open"):
                 if not announced:
                     emit(render(mode, "SETUP", T, snap,
-                                [f"window {live_bars} bars from the FVG bar · paper limit, nothing placed"]))
-                    st[key] = True; sent.append(f"SETUP {sym}")
+                                [f"Window: {live_bars} bars from the FVG bar (paper limit, nothing placed)", gtc_line(tk, live_bars)], m=m))
+                    st[key] = record; sent.append(f"SETUP {sym}")
                 continue
 
             if status == "resting":
                 if not announced:                      # first seen mid-window (e.g. after downtime)
-                    emit(render(mode, "SETUP", T, snap, [f"resting · {tk['bars_left']} bars left in the window"]))
-                    st[key] = True; sent.append(f"SETUP {sym}")
+                    emit(render(mode, "SETUP", T, snap, [f"Window: resting, {tk['bars_left']} bars left", gtc_line(tk, live_bars)], m=m))
+                    st[key] = record; sent.append(f"SETUP {sym}")
                 elif tk["bars_left"] <= 2 and not st.get(key + ":expiring"):
                     emit(render(mode, "EXPIRING", T, snap,
-                                [f"window closes in {tk['bars_left']} bar(s) · unfilled → cancel the limit"]))
+                                [f"Window: closes in {tk['bars_left']} bar(s) — cancel if unfilled", gtc_line(tk, live_bars)], m=m))
                     st[key + ":expiring"] = True; sent.append(f"EXPIRING {sym}")
                 continue
 
@@ -325,9 +434,9 @@ def cycle(params, tiers, mode: str, a) -> dict:
                 fkey = f"{sym}:fill:{tk['t_filled']}"
                 if not st.get(fkey):
                     emit(render(mode, "FILLED (paper)", T, snap,
-                                [f"filled {when(tk['t_filled'])} · price touched the paper limit",
-                                 f"unrealised {tk['unreal_R']:+.2f} R"]))
-                    st[fkey] = True; st.setdefault(key, True); sent.append(f"FILLED {sym}")
+                                [f"Filled: {when(tk['t_filled'])} (paper)",
+                                 f"Unrealised: {tk['unreal_R']:+.2f} R"], m=m))
+                    st[fkey] = True; st.setdefault(key, record); sent.append(f"FILLED {sym}")
                 continue
 
             if status == "closed" and announced:
@@ -335,8 +444,8 @@ def cycle(params, tiers, mode: str, a) -> dict:
                 if not st.get(ckey):
                     ev = "STOPPED (paper)" if tk["outcome"] == "stop" else "TARGET HIT (paper)"
                     emit(render(mode, ev, T, snap,
-                                [f"filled {when(tk['t_filled'])} · exit {when(tk['t_exit'])}",
-                                 f"result {tk['net_R']:+.2f} R   ({'stop, taker fee included' if tk['outcome']=='stop' else 'pool reached'})"]))
+                                [f"Filled: {when(tk['t_filled'])}", f"Exit: {when(tk['t_exit'])}",
+                                 f"Result: {tk['net_R']:+.2f} R  ({'stop, taker fee included' if tk['outcome']=='stop' else 'pool reached'})"], m=m))
                     st[ckey] = True; sent.append(f"{ev.split()[0]} {sym}")
                 continue
 
@@ -344,7 +453,7 @@ def cycle(params, tiers, mode: str, a) -> dict:
                 xkey = f"{sym}:expired:{tk['t_expired']}"
                 if not st.get(xkey):
                     emit(render(mode, "WINDOW EXPIRED · CANCEL", T, snap,
-                                [f"no fill within {live_bars} bars of the FVG bar · cancel the limit"]))
+                                [f"Window: no fill within {live_bars} bars of the FVG bar — cancel the limit", gtc_line(tk, live_bars)], m=m))
                     st[xkey] = True; sent.append(f"EXPIRED {sym}")
                 continue
 
@@ -355,7 +464,7 @@ def cycle(params, tiers, mode: str, a) -> dict:
                                                       f"{len(snap.get('open_orders', []))} open order(s) via SERVER_RO"))
         emit(f"{mode} · HEARTBEAT · {TS}\n{dt.datetime.now(TZ):%a %d %b %H:%M UTC} · {len(watch)} symbols scanned · "
              f"{len(sent)} event(s) this cycle · book ${book_usd:,.0f} → ceiling ${cap:,.2f}\nexchange: {ex}"
-             + (f"\nerrors: {'; '.join(errors)[:300]}" if errors else ""), to=to_sys)
+             + (f"\nerrors: {'; '.join(errors)[:300]}" if errors else ""), to=to_sys, html=False)
         st["_last_heartbeat"] = now
 
     if not a.stdout:

@@ -3,7 +3,7 @@
 # `make check` enforces it. Keys under `meta:` are exempt.
 meta:
   slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-  version: "1.9"
+  version: "1.11"
 
 mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
 
@@ -60,6 +60,10 @@ fees:                        # backtest assumptions; verify the account tier
   maker: 0.0000
   taker: 0.0004
   funding: none              # NOT modelled — do before any LIVE decision
+
+manage:                      # what the runner may DO on the exchange (needs binance/SERVER_TRADING_RW)
+  auto_cancel_expired: false # cancel Ed's entry order that matches a TS01 ticket once its 32-bar window has passed
+  check_missing_stop: true   # alert every cycle if a matching position has no stop order on the exchange
 
 alerts:
   recompute_r_on_fill: true

@@ -40,14 +40,16 @@ titles and Python module paths.
 ## Layout
 
 ```
-Trading/                    (%USERPROFILE%\Repos\Trading on the PC)
+Trading/                    (%USERPROFILE%\Trading on the PC)
 ├── README.md                  ← this file: the conventions
 ├── CLAUDE.md                  ← instructions to Claude Code on the server
 ├── Makefile                   ← new-strategy, check, install, status
 ├── .githooks/pre-commit       ← blocks code changes without a change-log entry
 ├── bin/                       ← repo-wide scripts (install, check, new-strategy)
 ├── templates/                 ← STRATEGY.md and unit templates for new strategies
+├── config/book.yaml           ← the Trading Book: capital, charter ceiling, book-wide caps, report settings (Ed only)
 ├── common/                    ← shared code, NOT strategy-specific
+│   ├── reports/               ← book-level reports (daily 07:00 → Digest)
 │   ├── data/                  ← klines download / cache (data.binance.vision, ccxt)
 │   ├── engine/                ← backtest engine core (locked ICT base lives here)
 │   ├── exchange/              ← Binance client, reconciliation, order helpers

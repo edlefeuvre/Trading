@@ -1,0 +1,18 @@
+# Trading Book — book-level settings shared by every strategy (the charter, in numbers).
+# Only Ed edits this file. Strategy caps in each params.yaml must fit inside these.
+book_usd: 356                 # ring-fenced Trading Book capital; update at the Sunday review
+unit_floor_usd: 20            # charter clause 3: risk per trade = max(1% of book, floor)
+max_open_positions: 3         # across all strategies
+max_notional_usd: 6000        # across all strategies
+daily_loss_stop_r: 3          # book stops for the day at -3R
+
+alerts:
+  book: trading               # Telegram address book (.config/telegram/trading.env)
+  daily_to: digest            # 07:00 daily report
+  syslog_to: syslog
+
+report:
+  hours: 24                   # window for the daily report
+  export_dir: "%USERPROFILE%\\OneDrive\\TRA\\30_Reports"   # HTML statement copied here too (blank to disable)
+  attribute_days: 4           # match exchange orders/positions to setups announced within this many days
+  price_tolerance_pct: 0.15   # ...and within this % of the ticket's entry/stop/target

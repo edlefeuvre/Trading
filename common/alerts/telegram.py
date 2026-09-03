@@ -170,10 +170,11 @@ class Bot:
                             f"(known: {', '.join(sorted(self.topics)) or 'none'})")
 
     def send(self, text: str, to: str | None = None, chat: str | None = None, topic: str | int | None = None,
-             silent: bool = False, chat_id: str | None = None) -> list[int]:
+             silent: bool = False, chat_id: str | None = None, html: bool = False) -> list[int]:
         """Send text (plain, no parse_mode — so R multiples, underscores and * are safe).
         to: a destination name from the address book (preferred), or '<chat>_<topic>' literally.
         chat/topic: the older explicit form; chat_id is a legacy alias.
+        html=True sends with parse_mode=HTML (use <pre> for aligned tickets; escape & < > in text).
         Splits at 4096 chars on line boundaries. Returns message ids."""
         if to is not None:
             chat, thread = self.resolve_to(to)
@@ -185,10 +186,47 @@ class Bot:
         for chunk in _chunks(text):
             res = self._call("sendMessage", chat_id=chat, text=chunk,
                              message_thread_id=thread,
+                             parse_mode="HTML" if html else None,
                              disable_notification="true" if silent else None,
                              disable_web_page_preview="true")
             ids.append(res["message_id"])
         return ids
+
+    def send_document(self, path, caption: str = "", to: str | None = None, chat: str | None = None,
+                      topic: str | int | None = None, html_caption: bool = False) -> int:
+        """Attach a file (<= 50 MB) to the chat/topic. Returns the message id."""
+        import mimetypes
+        import uuid
+        from pathlib import Path as _P
+        path = _P(path)
+        if to is not None:
+            chat_id, thread = self.resolve_to(to)
+        else:
+            thread = self.resolve_topic(topic, chat)
+            chat_id = self.resolve_chat(chat)
+        boundary = "----tg" + uuid.uuid4().hex
+        fields = {"chat_id": chat_id, "caption": caption[:1024]}
+        if thread:
+            fields["message_thread_id"] = str(thread)
+        if html_caption:
+            fields["parse_mode"] = "HTML"
+        body = b""
+        for k, v in fields.items():
+            body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+        ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{path.name}\"\r\n"
+                 f"Content-Type: {ctype}\r\n\r\n").encode() + path.read_bytes() + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
+        req = urllib.request.Request(API.format(token=self.token, method="sendDocument"), data=body,
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            raise TelegramError(f"sendDocument HTTP {e.code}: {e.read().decode()[:200]}") from e
+        if not res.get("ok"):
+            raise TelegramError(res.get("description", "sendDocument failed"))
+        return res["result"]["message_id"]
 
     def discover_topics(self) -> list[tuple[int, str, str]]:
         """(thread_id, chat_id, sample text) for topic messages seen by getUpdates.
@@ -225,9 +263,19 @@ def _chunks(text: str):
     yield text
 
 
+def escape(text: str) -> str:
+    """Escape for parse_mode=HTML."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def send(text: str, to: str | None = None, book: str = "trading", bot: str = "rickyassist_bot", **kw) -> list[int]:
     """Convenience for runners: send(text, to="alerts")  (book 'trading', bot Ricky by default)."""
     return Bot(bot, book=book).send(text, to=to, **kw)
+
+
+def send_document(path, caption: str = "", to: str | None = None, book: str = "trading",
+                  bot: str = "rickyassist_bot", **kw) -> int:
+    return Bot(bot, book=book).send_document(path, caption=caption, to=to, **kw)
 
 
 def main(argv=None) -> int:

@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.9
+version: 1.11
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -131,6 +131,8 @@ match this table; `make check` diffs them.
 | `fees.taker` | 0.0004 | re-run required if account tier differs | engine |
 | `fees.funding` | none | model it before any LIVE decision | engine — **not modelled today** |
 | `alerts.recompute_r_on_fill` | true | none | runner |
+| `manage.auto_cancel_expired` | false | true only by Ed's decision (change-log row) | runner — cancels a matching entry order after the window, via SERVER_TRADING_RW; cancel is the runner's only write |
+| `manage.check_missing_stop` | true | none | runner — `⚠ NO STOP ON EXCHANGE` to Alerts while a matching position has no stop order |
 | `alerts.book` | trading | none | runner, weekly — `.config\telegram\trading.env`, from Bitwarden item `telegram/trading` |
 | `alerts.to` | trading | any name in the book | runner — lifecycle alerts (`TELEGRAM_TO_TRADING`) |
 | `alerts.critical_to` | alerts | any name in the book | runner — CANCEL NOW / STATE MISMATCH / STOPPED / BLOCKED also here |
@@ -208,7 +210,7 @@ row.
 | `src/runner.py` | PAPER runner, one cycle per invocation | 1.8 | `choch_watch.py` migrated 2 Sep 2026. Detection unchanged (imports `common/engine`); adds MODE prefix, FILLED/STOPPED/TARGET HIT/EXPIRING/WINDOW EXPIRED events, SERVER_RO reconciliation read, `results/holdings.json`, `results/state.json` (seeded from `~/.choch-watch/state.json` on first run), `logs/TS01-runner.jsonl`, hourly HEARTBEAT to syslog. Refuses LIVE/SHADOW. |
 | `src/weekly.py` | the Sunday programme (§8a) | 1.8 | `choch_sizes.py` migrated 2 Sep 2026 on `common/engine` + `common/data`. Writes `results/weekly/<date>/r_factors.csv` + `summary.md`, sends to Digest, proposes tier changes; `--apply` rewrites `universe.yaml` tiers for Ed to commit. |
 | `src/backtest.py` | backtest entry point | 1.0 skeleton | calls `common/engine` with this folder's config |
-| `src/tests/…` | tests | 1.8 | `test_engine_equivalence.py` proves `common/engine` reproduces the pre-migration functions bar-for-bar on 40 synthetic series; `test_runner_smoke.py` runs three PAPER cycles with mocked data (prefix, tier line, exchange line, dedupe, closures once); `test_replay.py` awaits the five acceptance cases |
+| `src/tests/…` | tests | 1.11 | `test_engine_equivalence.py` proves `common/engine` reproduces the pre-migration functions bar-for-bar on 40 synthetic series; `test_runner_smoke.py` runs three PAPER cycles with mocked data (prefix, tier line, exchange line, dedupe, closures once); `test_guards.py` (1.11) checks matching, NO STOP to Alerts, CANCEL NOW once by default, opt-in auto-cancel once, unrelated orders untouched — the cancel call is captured, never sent; `test_replay.py` awaits the five acceptance cases |
 | `systemd/TS01-runner.service` | Linux variant (not used on the Windows PC) | 1.0 | |
 | `systemd/TS01-weekly.service` | Linux variant | 1.1 | |
 | `systemd/TS01-weekly.timer` | Linux variant | 1.1 | |
@@ -245,7 +247,7 @@ deviations in the journal; they do not count toward row 6.
 | | |
 |---|---|
 | Runner | Windows Task Scheduler task `TS01-runner`: `python -m strategies.TS01_CHoCH_ICT_15m_Binance_USDCp.src.runner` from `%USERPROFILE%\Repos\Trading`, every 15 min at hh:00:30 / 15:30 / 30:30 / 45:30 (30 s after bar close so the closed candle is final), 10-min limit, 3 restarts a minute apart. Registered by `deploy\windows\register-ts01-runner.ps1`. Runs alongside `CHoCH watcher` until they agree, then the old task is disabled. |
-| Scheduled jobs | `TS01-weekly` task, Sun 06:00 UTC → `src/weekly.py` (§8a); `TS-secrets-sync` hourly (optional) |
+| Scheduled jobs | `TS01-weekly` Sundays 08:00 local → `src/weekly.py` (§8a). Book-level: `TRADING-daily` 07:00 local → `common/reports/daily.py` (every strategy + OUTSIDE STRATEGIES, to Digest); `TS-secrets-sync` hourly (optional) |
 | Credentials | by provider under `%USERPROFILE%\.config\`: `binance\SERVER_RO.env` (Enable Reading only — reconciliation, reports, Sunday programme), `binance\SERVER_TRADING_RW.env` (Enable Futures only — order placement, created only after the paper gate), `telegram\rickyassist_bot.env`. The Investment Book uses its own `SERVER_INVEST_RW` (margin loan / options), never shared with Trading. No server key has withdrawals or transfers. All IP-restricted. Bitwarden is the master; `sync-secrets.ps1` refreshes the files. |
 | Logs | `logs/TS01-runner.jsonl` — one JSON line per cycle (symbols, events sent, errors, exchange counts) plus reconcile failures; Task Scheduler history for the process itself |
 | Data dependencies | `common/data` cache of 15m klines + funding for every symbol in `universe.yaml`; the weekly job extends the cache to the latest complete Saturday 23:45 UTC bar |
@@ -399,6 +401,8 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-03 | 1.11 | §3, §5 | Runner recognises Ed's exchange orders/positions that match a ticket (`your order … matches this ticket`). Optional `manage.auto_cancel_expired`: cancels a matching unfilled entry once the 32-bar window passes (SERVER_TRADING_RW; cancel is the only write in the codebase). `manage.check_missing_stop`: alerts while a matching position has no stop order. Positions are never time-expired — they exit by stop or target. | `src/runner.py`, `common/exchange/binance.py`, `config/params.yaml`, `src/tests/test_guards.py` |
+| 2026-09-03 | 1.10 | §6, §8 | Runner records each announced setup's side/entry/stop/target in `results/state.json` so the book-level daily report (`common/reports/daily.py`, task `TRADING-daily`, 07:00, Digest) can attribute exchange positions and orders to TS01 and flag OUTSIDE STRATEGIES items; the report is a short Telegram summary plus an attached HTML statement (also exported to `OneDrive\TRA\30_Reports`). Tickets now sent as monospace HTML blocks. `binance.income()` added. Book-level settings in `config/book.yaml`. | `src/runner.py`, `common/reports/daily.py`, `common/exchange/binance.py`, `common/alerts/telegram.py`, `config/book.yaml`, `deploy/windows/register-daily-report.ps1` |
 | 2026-09-03 | 1.9 | §3, §5 | Every notification now carries a Binance-form ticket block (Order / Price / Size / Take Profit trigger→Limit / Stop Loss trigger→Market, reduce-only, margin, leverage) with price and size rounded to the symbol's real tick and lot size from exchangeInfo (cached daily). `orders.*` parameters added. | `src/runner.py`, `common/data/binance_klines.py`, `config/params.yaml` |
 | 2026-09-02 | 1.8 | §3, §6, §8 | Runner v0: `choch_watch.py` migrated into `src/runner.py` on top of `common/engine`, `common/data`, `common/alerts`, `common/exchange`. PAPER only; MODE prefix on every message; new lifecycle events; SERVER_RO reconciliation read and `holdings.json`; JSONL cycle log; hourly heartbeat. Engine equivalence proven by test. Task Scheduler registration script for Windows. | `src/runner.py`, `src/tests/*`, `config/params.yaml`, `common/engine/ict_base.py`, `common/data/binance_klines.py`, `common/exchange/binance.py`, `deploy/windows/register-ts01-runner.ps1` |
 | 2026-09-02 | 1.7 | §2, §3, §5, §6, §8a, §9a, frontmatter | Spec rewritten from the live code (`choch_watch.py`, `choch_sizes.py`): sweep reclaim ≤4 bars, discount-only filter, target = pivot A, stop-before-target, fee on stops only, funding not modelled. Pool-consumed cancel marked researched-not-live and set false. Universe = the 21 `SYMBOLS` with tiers from `sizes.json`; coverage register populated with tiers. `mandate:` field added (Board naming convention). | `STRATEGY.md`, `config/params.yaml`, `config/universe.yaml`, `docs/conventions/*` |
