@@ -22,6 +22,8 @@ report:
 drive:
   enabled: true
   trade_reports_folder: 1J3NAcjQFZdt1yRYspKpuapWAaylEdYIr   # Drive: _Logs/05 - Wealth/Trading/TS01 trade reports
+  weeklies_folder: 1C1NqeNPS2mFhKt0GluKzmAo_XBA65XC8       # Drive: _Logs/05 - Wealth/Trading/Weeklies — one folder per Sunday review
+  week_folder: "{sunday:%Y-%m-%d} W{iso_week:02d}"          # e.g. "2026-09-06 W36", created on first write each week
 
 # Links out to your own TradingView layout. layout_id comes from the chart URL:
 # tradingview.com/chart/<layout_id>/ — blank falls back to a plain symbol chart.

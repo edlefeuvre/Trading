@@ -170,11 +170,14 @@ class Bot:
                             f"(known: {', '.join(sorted(self.topics)) or 'none'})")
 
     def send(self, text: str, to: str | None = None, chat: str | None = None, topic: str | int | None = None,
-             silent: bool = False, chat_id: str | None = None, html: bool = False) -> list[int]:
+             silent: bool = False, chat_id: str | None = None, html: bool = False,
+             buttons: list[list[tuple[str, str]]] | None = None) -> list[int]:
         """Send text (plain, no parse_mode — so R multiples, underscores and * are safe).
         to: a destination name from the address book (preferred), or '<chat>_<topic>' literally.
         chat/topic: the older explicit form; chat_id is a legacy alias.
         html=True sends with parse_mode=HTML (use <pre> for aligned tickets; escape & < > in text).
+        buttons: rows of (label, callback_data) → an inline keyboard on the LAST chunk. callback_data
+        is at most 64 bytes; the press arrives as a callback_query update at the bot's webhook.
         Splits at 4096 chars on line boundaries. Returns message ids."""
         if to is not None:
             chat, thread = self.resolve_to(to)
@@ -183,14 +186,28 @@ class Bot:
             thread = self.resolve_topic(topic, chat)
             chat = self.resolve_chat(chat)
         ids = []
-        for chunk in _chunks(text):
+        chunks = list(_chunks(text))
+        for i, chunk in enumerate(chunks):
             res = self._call("sendMessage", chat_id=chat, text=chunk,
                              message_thread_id=thread,
                              parse_mode="HTML" if html else None,
                              disable_notification="true" if silent else None,
-                             disable_web_page_preview="true")
+                             disable_web_page_preview="true",
+                             reply_markup=inline_keyboard(buttons) if (buttons and i == len(chunks) - 1) else None)
             ids.append(res["message_id"])
         return ids
+
+    def edit(self, chat_id: str | int, message_id: int, text: str, html: bool = False,
+             buttons: list[list[tuple[str, str]]] | None = None) -> None:
+        """Rewrite a message the bot sent. buttons=None removes any keyboard (pass [] to keep none)."""
+        self._call("editMessageText", chat_id=str(chat_id), message_id=message_id, text=text[:MAX_LEN],
+                   parse_mode="HTML" if html else None, disable_web_page_preview="true",
+                   reply_markup=inline_keyboard(buttons) if buttons else json.dumps({"inline_keyboard": []}))
+
+    def answer_callback(self, callback_query_id: str, text: str = "", alert: bool = False) -> None:
+        """Acknowledge a button press (Telegram shows a spinner until this is called)."""
+        self._call("answerCallbackQuery", callback_query_id=callback_query_id, text=text[:200] or None,
+                   show_alert="true" if alert else None)
 
     def send_document(self, path, caption: str = "", to: str | None = None, chat: str | None = None,
                       topic: str | int | None = None, html_caption: bool = False) -> int:
@@ -252,6 +269,13 @@ class Bot:
             if chat:
                 seen[str(chat["id"])] = chat.get("title") or chat.get("username") or chat.get("first_name", "")
         return sorted(seen.items())
+
+
+def inline_keyboard(rows: list[list[tuple[str, str]]] | None) -> str | None:
+    """JSON for reply_markup from rows of (label, callback_data)."""
+    if not rows:
+        return None
+    return json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d[:64]} for t, d in row] for row in rows]})
 
 
 def _chunks(text: str):

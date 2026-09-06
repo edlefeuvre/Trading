@@ -82,3 +82,4 @@ weekly:
   min_trades_for_r: 30       # below this the R factor is shown as provisional
   tier_rule: sign_two_periods   # 1.0 both positive, 0.5 one, 0 neither / <12m history
   lookback_months: 12
+  approval_ttl_days: 7       # a proposed R-factor change can be applied from Telegram for this long; the next run supersedes it

@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.29
+version: 1.30
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -142,6 +142,7 @@ match this table; `make check` diffs them.
 | `alerts.heartbeat_minutes` | 60 | 30–240 | runner |
 | `coverage.max_age_days` | 7 | 7–14 | runner (refuses symbols with stale coverage) |
 | `weekly.min_trades_for_r` | 30 | 20–50 | weekly report (R factor shown as provisional below this) |
+| `weekly.approval_ttl_days` | 7 | 7–14 | weekly, approvals — how long a proposed R-factor change can be applied from Telegram; the next run supersedes it |
 
 ## 4. Execution & risk
 
@@ -222,16 +223,16 @@ row.
 | `config/universe.yaml` | the 21 symbols with tier multipliers | 1.7 | adding a symbol is MAJOR; tiers change only via the Sunday programme + Ed |
 | `pine/TS01_CHoCH_alerts.pine` | TradingView indicator: sweep → CHoCH → gap bar, alert on bar close | — | **migrate from:** current TradingView script(s). Header comment must carry `TS01 v<version>`. Alerts are for eyes and the journal; the runner detects independently. |
 | `src/runner.py` | PAPER runner, one cycle per invocation | 1.13 | `choch_watch.py` migrated 2 Sep 2026. Detection unchanged (imports `common/engine`); adds MODE prefix, FILLED/STOPPED/TARGET HIT/EXPIRING/WINDOW EXPIRED events, SERVER_RO reconciliation read, `results/holdings.json`, `results/state.json` (seeded from `~/.choch-watch/state.json` on first run), `logs/TS01-runner.jsonl`, hourly HEARTBEAT to syslog. Refuses LIVE/SHADOW. 1.11–1.12 add the order guards and conditional-order reading; 1.13 wires the per-setup trade file (`--no-report` skips it; `--stdout` never publishes). |
-| `src/weekly.py` | the Sunday programme (§8a) | 1.8 | `choch_sizes.py` migrated 2 Sep 2026 on `common/engine` + `common/data`. Writes `results/weekly/<date>/r_factors.csv` + `summary.md`, sends to Digest, proposes tier changes; `--apply` rewrites `universe.yaml` tiers for Ed to commit. |
+| `src/weekly.py` | the Sunday programme (§8a) | 1.9 | `choch_sizes.py` migrated 2 Sep 2026 on `common/engine` + `common/data`. Writes `results/weekly/<date>/{r_factors.csv, run.json, summary.md, proposal.json}`; sends the table to Digest; files the review (summary first, detail below, `.md` + Google Doc + CSV, plus the study HTML, paper-track register and per-setup tranche list) into the Sunday folder on Drive with a generated `00 - index`; posts Apply / Hold / Re-run to Approvals when a factor would change. `--apply [--proposal ID]` rewrites `universe.yaml`, adds the change-log row, refreshes the filed Status line and COMMITS (pushes if a remote exists); `--hold`; `--run-now`; `--status`. Refuses an expired proposal or a changed `params.yaml`. |
 | `src/backtest.py` | backtest entry point | 1.0 skeleton | calls `common/engine` with this folder's config |
-| `src/tests/…` | tests | 1.29 | `test_engine_equivalence.py` proves `common/engine` reproduces the pre-migration functions bar-for-bar on 40 synthetic series; `test_runner_smoke.py` runs three PAPER cycles with mocked data (prefix, tier line, exchange line, dedupe, closures once); `test_guards.py` (1.11) checks matching, NO STOP to Alerts, CANCEL NOW once by default, opt-in auto-cancel once, unrelated orders untouched — the cancel call is captured, never sent; `test_trade_file.py` (1.13) checks the stable document name, the layout chart link, notes and snapshot surviving a rewrite, event dedupe, one document per setup, fail-soft when Drive is down, the report link on the SETUP message, one `REPORT CLOSED` at the window with the right Traded/Paper stamp, and no Drive writes on `--stdout`; `test_tvshot.py` (1.25) covers the chart URL, the permalink pattern, the shot filename, fail-soft capture and a real headless capture of a local page, skipped where Playwright is not installed; `test_parallel_check.py` (1.28) covers the state-key parsing, the unfunded-symbol classification and the window filter; `test_replay.py` awaits the five acceptance cases |
+| `src/tests/…` | tests | 1.30 | `test_weekly_apply.py` (1.30): review layout, proposal record, apply all-or-nothing on a throwaway git repo, refusals, hold; `test_approvals.py` (1.30): owner check, button → CLI mapping, text-reply fallback, buttons kept on failure, Sunday folder naming and index; `test_engine_equivalence.py` proves `common/engine` reproduces the pre-migration functions bar-for-bar on 40 synthetic series; `test_runner_smoke.py` runs three PAPER cycles with mocked data (prefix, tier line, exchange line, dedupe, closures once); `test_guards.py` (1.11) checks matching, NO STOP to Alerts, CANCEL NOW once by default, opt-in auto-cancel once, unrelated orders untouched — the cancel call is captured, never sent; `test_trade_file.py` (1.13) checks the stable document name, the layout chart link, notes and snapshot surviving a rewrite, event dedupe, one document per setup, fail-soft when Drive is down, the report link on the SETUP message, one `REPORT CLOSED` at the window with the right Traded/Paper stamp, and no Drive writes on `--stdout`; `test_tvshot.py` (1.25) covers the chart URL, the permalink pattern, the shot filename, fail-soft capture and a real headless capture of a local page, skipped where Playwright is not installed; `test_parallel_check.py` (1.28) covers the state-key parsing, the unfunded-symbol classification and the window filter; `test_replay.py` awaits the five acceptance cases |
 | `systemd/TS01-runner.service` | Linux variant (not used on the Windows PC) | 1.0 | |
 | `systemd/TS01-weekly.service` | Linux variant | 1.1 | |
 | `systemd/TS01-weekly.timer` | Linux variant | 1.1 | |
 | `../../bin/parallel-check` | watcher-vs-TS01 comparison for the parallel run | 1.29 | Compares announced setups from the two state files (both keyed `SYMBOL:<fvg bar ms>`, TS01 having inherited the format). Reports agreement, either-side-only on funded symbols, and separately the watcher's setups on symbols TS01 does not fund — which are expected, not divergence. Setups older than TS01's first logged cycle are excluded as inherited (its state was seeded from the watcher's), so agreement counts only independent detection; `--after` overrides the cutoff, `--include-inherited` disables it for inspection and says so in the output. Read-only; `--send` posts the summary to the syslog topic. |
 | `../../deploy/windows/register-ts01-runner.ps1` | Task Scheduler task `TS01-runner`, every 15 min at :00:30 | 1.8 | replaces `CHoCH watcher` once both agree for a few days |
 | `../../deploy/windows/register-ts01-weekly.ps1` | Task Scheduler task `TS01-weekly`, Sundays 08:00 local | 1.8 | |
-| `results/` | `state.json` (dedupe + heartbeat clock), `holdings.json` (exchange snapshot), `weekly/YYYY-MM-DD/`, `coverage.csv`, `acceptance/` | | small JSON/CSV/MD only; klines cache lives in `%USERPROFILE%\.config\trading-data` |
+| `results/` | `state.json` (dedupe + heartbeat clock), `holdings.json` (exchange snapshot), `weekly/YYYY-MM-DD/` (incl. `proposal.json`, `drive.json`), `coverage.csv` (one row per applied factor change), `study-hours.html`, `tranche-setups.csv`, `acceptance/` | | small JSON/CSV/MD only; klines cache lives in `%USERPROFILE%\.config\trading-data` |
 
 Shared code this strategy depends on (documented in `common/*/README.md`, and
 any behavioural change there adds a row to this file's change log):
@@ -266,6 +267,10 @@ deviations in the journal; they do not count toward row 6.
 | `common/charts/tvshot.py` | shared | 1.26 | Chart capture: opens Ed's TradingView layout in a headless Chromium under a persistent browser profile (`.config\tradingview\profile`, signed in once by `--login`), saves a PNG of the chart pane and asks TradingView for its own permanent `/x/` snapshot link. Read-only; no credentials in the repo. `--login` signs in through an ordinary browser (Edge by default) rather than an automated one, because Google refuses OAuth to a driven browser; the profile is then driven headless through the matching Playwright channel. Not yet wired into the close. |
 | `common/reports/trade_file.py` | shared | 1.24 | The per-setup living Doc: stable name, lifecycle table, chart links, notes and pasted snapshot preserved; `sync()` is what the runner calls; fail-soft publish |
 | `common/drive/gdocs.py` | shared | 1.21 | Google Docs in Drive as Ed; stable file id/URL per setup; preserves the `## My notes` section across runner rewrites |
+| `common/drive/files.py` | shared | 1.30 | Folders and plain files on the same `drive.file` token as `gdocs.py`: find-or-create a folder by name, upsert a file by name, upsert Markdown as a Google Doc. No new consent, no new secret. |
+| `common/reports/weekly_folder.py` | shared | 1.30 | The Sunday folder convention — `Trading/Weeklies/yyyy-mm-dd Wnn/`, files numbered in reading order, generated index. Strategy-agnostic. |
+| `common/alerts/approvals.py` | shared | 1.30 | Ed's Apply / Hold / Re-run buttons and the `approved` reply: `handle_update(update, repo_root)` for whichever process owns the bot webhook (Paperclip — never write to its config), `--poll` for a bot without one. Owner check on `TELEGRAM_OWNER_ID`; runs the strategy's `weekly --apply/--hold/--run-now`; edits the message with the outcome. |
+| `results/sunday-open-items.yaml` | Ed's list | 1.30 | The open decisions printed as "For the Sunday pass" in every filed review. Ed edits; the job reads. |
 | Scheduled jobs | `TS01-weekly` Sundays 08:00 local → `src/weekly.py` (§8a). Book-level: `TRADING-daily` 07:00 local → `common/reports/daily.py` (every strategy + OUTSIDE STRATEGIES, to Digest); `TS-secrets-sync` hourly (optional) |
 | Credentials | by provider under `%USERPROFILE%\.config\`: `binance\SERVER_RO.env` (Enable Reading only — reconciliation, reports, Sunday programme), `binance\SERVER_TRADING_RW.env` (Enable Futures only — order placement, created only after the paper gate), `telegram\rickyassist_bot.env`. The Investment Book uses its own `SERVER_INVEST_RW` (margin loan / options), never shared with Trading. No server key has withdrawals or transfers. All IP-restricted. Bitwarden is the master; `sync-secrets.ps1` refreshes the files. |
 | Logs | `logs/TS01-runner.jsonl` — one JSON line per cycle (symbols, events sent, errors, exchange counts) plus reconcile failures; Task Scheduler history for the process itself |
@@ -277,45 +282,86 @@ Automation order, decided 31 Aug: detection → paper logging (no placement) →
 lifecycle alerts (pool consumed, window expiring) → order placement only after
 the paper gate.
 
-### 8a. The Sunday programme (`TS01-weekly.timer` → `src/weekly.py`)
+### 8a. The Sunday programme (`TS01-weekly` → `src/weekly.py`)
 
-Exists today as `choch_sizes.py` (prints the tier table; `--write` applies it to
-`sizes.json`). Migrates to `src/weekly.py`. Runs Sunday 06:00 UTC, before the
-Sunday pass. It is the only process allowed to change §9a, and it never applies
-multipliers itself: it **proposes** them to the Digest topic and Ed applies with
-`weekly --apply`, which writes `results/sizes.json` and a change-log row. Steps:
+Runs Sunday 08:00 local (Task Scheduler), before the Sunday pass. It is the only
+process allowed to change §9a, and it never applies multipliers itself: it
+**proposes** them and Ed applies — from the phone, with the Apply button in
+00 Approvals, or with `weekly --apply` on the PC. Either way the apply writes
+`universe.yaml`, adds the change-log row and **commits** (the commit is the
+button). Steps:
 
 1. **Roll the dataset forward** to the last complete bar of Saturday; record the
    dataset end date and bar count per symbol.
 2. **Re-run the locked engine** on every symbol in `universe.yaml` at the
-   current spec version and `params.yaml`, base case and pool-consumed-filtered
-   case, real funding, fee model from §3.
+   current spec version and `params.yaml`; classify by the tier rule (§3
+   `weekly.tier_rule`).
 3. **Write results** to `results/weekly/YYYY-MM-DD/`: `r_factors.csv` (one row
-   per symbol — see columns below), `summary.md` (the review note), and
-   `run.json` (engine version, params hash, dataset window, wall time).
-4. **Diff against last week**: per symbol, change in net R/trade, n, t, and
-   whether the symbol crossed any of the review thresholds below.
-5. **Update the coverage register** (§9a) from `r_factors.csv` and append one
-   line to the coverage history in `results/coverage.csv`.
-6. **Send the review** to Ed: Telegram message `PAPER · WEEKLY · TS01` with the
-   headline table (symbol, net R/trade filtered, n, t, Δ vs last week, flag),
-   and mirror `summary.md` to the Trading project as `claude/TS01-weekly-latest.md`
-   (the previous week's file is kept under its date).
-7. **Fail loudly**: if any symbol's data is short, the engine errors, or the
-   params hash differs from the one in the last change-log row, send
-   `⚠ WEEKLY FAILED` with the reason and leave §9a untouched.
+   per symbol), `run.json` (weekly version, spec version, params hash, dataset
+   window, wall time), `summary.md` (the review, see layout below) and — only
+   when a factor would change — `proposal.json`: the changes, the params hash,
+   an expiry (`weekly.approval_ttl_days`) and an **id** (hash of changes + run
+   date + params hash) so an old approval can never apply a different week's
+   numbers.
+4. **Refresh the studies** that file with the review: `bin/study-hours --html
+   results/study-hours.html --csv results/tranche-setups.csv` (the 7-day × 8-block
+   grid and one row per filled setup with its UTC day, 3h block, symbol, side, R
+   and pool R, so any grid cell can be opened to the trades behind it). Fail-soft.
+5. **File the review** into the Sunday folder on Google Drive,
+   `_Logs/05 - Wealth/Trading/Weeklies/yyyy-mm-dd Wnn/` (`config/book.yaml`
+   `drive.weeklies_folder`, `drive.week_folder`; created on first write), one
+   folder per Sunday so there is one place to go through everything examined that
+   week, files numbered in reading order: `00 - Sunday review … — index` (Doc,
+   generated last: one line per file, decisions taken, open decisions),
+   `01 - TS01 weekly R-factor review` (Google Doc for the phone — Drive's app
+   cannot preview `.md` — plus the `.md` and `r_factors.csv`), `03 - study-hours.html`,
+   `04 - paper-track.csv`, `05 - tranche-setups.csv`. Existing files are
+   **updated in place**, never duplicated. Same `drive.file` token as the trade
+   reports (§6 `gdocs.py`). Failure is a `⚠` line in the Digest message, not a
+   job failure; the repo copy is canonical and there is no OneDrive copy.
+6. **Send the review**: Telegram `PAPER · WEEKLY · TS01` to Digest with the
+   headline table (unchanged shape since v1.8, so Claude can still mirror it to
+   the Trading project as `claude/TS01-weekly-latest.md` at the Sunday review)
+   plus the Drive link.
+7. **Ask for the decision**: if `proposal.json` exists, post `PAPER · APPROVAL ·
+   TS01` to Approvals — the changes with the figure that tips each — with an
+   inline keyboard **Apply / Hold / Re-run** (`common/alerts/approvals.py`). A
+   press, or a reply of `approved` / `hold` to that message, is checked against
+   `TELEGRAM_OWNER_ID` and runs `weekly --apply|--hold --proposal <id>` or
+   `weekly --run-now`; the message is edited with `✅ APPLIED · <sha>`, `⏸ HELD`
+   or `❌ NOT APPLIED: <reason>` (buttons kept so Ed can retry). Apply is
+   all-or-nothing: the new `universe.yaml` is written to a copy and moved in
+   last; the change-log row, `results/coverage.csv`, the Status line of the
+   filed review and the commit follow. The runner picks the new factors up on
+   its next 15-minute cycle. Apply **refuses** an expired proposal, a proposal
+   whose params hash no longer matches `params.yaml`, or a dirty `universe.yaml`
+   / `STRATEGY.md`.
+8. **Fail loudly**: if any symbol's data is short or the engine errors, the
+   symbol is listed as skipped in `run.json` and the Digest message; §9a is
+   left untouched.
 
-`r_factors.csv` columns: `symbol, dataset_start, dataset_end, bars, n_setups,
-n_kept, n_discarded, net_r_base, net_r_kept, net_r_discarded, t_kept, win_pct,
-median_stop_pct, median_bars_to_fill, funding_r_per_trade, provisional
-(n_kept < weekly.min_trades_for_r), flag`.
+`summary.md` layout (Drive renders pipe tables badly, so label lines and a
+fenced block): title with spec version and date; `Run` / `Book` / `Universe` /
+`Activity` / `Proposed changes` / **`Status`** (`PROPOSED` → `APPLIED <date>` or
+`HELD <date>`, rewritten by `--apply`/`--hold`); `Holdings` (§8b, when anything
+is held); `Summary` — generated prose: each proposed change with the figure that
+tips it and whether it is provisional, the improving-vs-deteriorating split of the
+0.5 group, provisional symbols; **For the Sunday pass** — the numbered open
+decisions from `results/sunday-open-items.yaml` (Ed's file); `Detail` — the full
+table as fixed-width text; the original Telegram message verbatim; a footer with
+the weekly version and params hash.
 
-Review flags (what Ed is being asked to look at, not decisions the job makes):
-`NEW` first run for the symbol; `SIGN FLIP` net R kept changed sign;
-`DEGRADED` net R kept fell by more than 0.10R or t fell below 1.0; `STALE DATA`
-dataset end older than 8 days; `THIN` provisional. **The job never changes
-`universe.yaml`, `params.yaml` or the spec.** Adding or removing a symbol is
-Ed's decision at the Sunday pass, recorded in the change log.
+`r_factors.csv` columns: `symbol, dataset_start, dataset_end, bars, n_trades,
+n_12m, r_prior, r_12m, tier_now, tier_proposed, provisional
+(n_12m < weekly.min_trades_for_r), rule`.
+
+**The job never changes `universe.yaml`, `params.yaml` or the spec.** Adding or
+removing a symbol is Ed's decision at the Sunday pass, recorded in the change
+log. The webhook that receives the button press belongs to Paperclip
+(`%USERPROFILE%\.config\telegram-webhook\`, never written from this repo); it
+calls `common.alerts.approvals.handle_update(update, repo_root)`. For a bot with
+no webhook, `python -m common.alerts.approvals --poll` does the same by
+long-polling.
 
 ### 8b. Holdings
 
@@ -530,6 +576,7 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-07 | 1.30 | §3, §6, §8a | The Sunday programme files its review into one Google Drive folder per Sunday (`Trading/Weeklies/yyyy-mm-dd Wnn/`, summary first, detail below, Google Doc copy for the phone, study HTML, paper-track register and the new per-setup tranche list, generated index) and asks for the decision with an Apply / Hold / Re-run keyboard in Approvals; `weekly --apply --proposal <id>` rewrites `universe.yaml` all-or-nothing, adds the change-log row and commits — the button is the commit. Proposal record with id, expiry and params hash; `--hold`, `--run-now`, `--status`. `common/drive/files.py` (folders and plain files on the existing `drive.file` token), `common/reports/weekly_folder.py`, `common/alerts/approvals.py`; Telegram sender gains inline keyboards, `edit`, `answer_callback`; `bin/study-hours --csv`. No OneDrive copy (Ed, 6 Sep). Tests on a throwaway git repo. | `src/weekly.py`, `common/drive/files.py`, `common/reports/weekly_folder.py`, `common/alerts/approvals.py`, `common/alerts/telegram.py`, `bin/study-hours`, `config/params.yaml`, `config/book.yaml`, `results/sunday-open-items.yaml`, `src/tests/test_weekly_apply.py`, `src/tests/test_approvals.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.29 | §6, §7 | **Fix: the parallel-run baseline was measuring inheritance, not agreement.** TS01's `state.json` was seeded from the watcher's on first run (so nothing would be announced twice), and those inherited keys are shape-identical to independent agreement — the first `parallel-check` run reported 18 agreements and, tellingly, zero setups on the six symbols TS01 does not fund, which is what inheritance looks like. Setups whose FVG bar predates TS01's first logged cycle are now excluded and counted as inherited; `--after` sets the cutoff by hand and `--include-inherited` re-includes them while printing that the result is not evidence. | `bin/parallel-check`, `src/tests/test_parallel_check.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.28 | §6, §7 | `bin/parallel-check`: the old watcher stays running beside TS01 until a week of agreement is on the record (Ed's call, 7 Sep — and the right one; a retirement decision wants evidence, not assurance). Comparison is on announced setups from the two state files rather than on Telegram messages, since the two systems' message vocabularies differ by design and only detection equivalence is being tested. The watcher's 21 symbols against TS01's 15 funded ones is accounted for explicitly so the universe difference cannot read as a fault. This is the evidence for §7 gate row on runner equivalence. | `bin/parallel-check`, `src/tests/test_parallel_check.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.27 | §5 | **Fix: no TS01 message could be sent under 1.24–1.26.** `book` in `cycle()` is the Telegram address book NAME (`alerts.book`); 1.24 reused the same identifier for the parsed `config/book.yaml`, so `telegram.send(book=…)` received a dict and every send failed with a credentials path built from it (`.config\telegram\{'book_usd': 356, …}.env`). Renamed to `book_cfg`. Regression test asserts the address book reaching the sender is a non-empty string; it fails if the shadowing returns. Diagnosed from `TS01-runner.jsonl`, which had recorded the malformed path on every cycle with an event. | `src/runner.py`, `src/tests/test_trade_file.py`, `STRATEGY.md` |

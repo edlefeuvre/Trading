@@ -453,6 +453,28 @@ pre-registration — hypothesis, mechanism, expected direction and decision rule
 
 
 
+def write_csv(path: Path, grid: dict, DOW: list[str], w: int) -> None:
+    """One row per filled setup, keyed the way the grid is: UTC weekday and hour block."""
+    import csv
+    rows = []
+    for (d, b), evs in grid.items():
+        for e in evs:
+            u = dt.datetime.fromtimestamp(e["t_placed"] / 1000, dt.timezone.utc)
+            rows.append(dict(utc_day=DOW[d], block=bucket_label(b, w) + "Z", fvg_bar_utc=u.strftime("%Y-%m-%d %H:%M"),
+                             local_hour=local_dt(e["t_placed"]).hour, unattended=int(unattended(e["t_placed"])),
+                             symbol=e.get("symbol", ""), side="long" if e["d"] == 1 else "short",
+                             entry=round(e["mid"], 6), stop=round(e["stop"], 6), target=round(e["target"], 6),
+                             stop_pct=round(e["stop_pct"], 3), pool_r=round(e["poolR"], 3),
+                             outcome=e.get("outcome", ""), net_r=round(e.get("net_R", 0.0), 4),
+                             filled_utc=dt.datetime.fromtimestamp(e["t_filled"] / 1000, dt.timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                             exit_utc=dt.datetime.fromtimestamp(e["t_exit"] / 1000, dt.timezone.utc).strftime("%Y-%m-%d %H:%M")))
+    rows.sort(key=lambda r: r["fvg_bar_utc"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else ["symbol"])
+        wr.writeheader(); wr.writerows(rows)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--strategy", default="TS01_CHoCH_ICT_15m_Binance_USDCp")
@@ -464,6 +486,8 @@ def main(argv=None) -> int:
                     help="width of the hour-of-day buckets, UTC (default 3). The boundary OFFSET is fixed "
                          "at 00:00Z; shifting it is another look, so it is deliberately not a knob.")
     ap.add_argument("--min-n", type=int, default=15, help="heatmap cells below this n are drawn hollow and never read")
+    ap.add_argument("--csv", default="", help="also write one row per FILLED setup (UTC day, block, symbol, side, R, pool R) "
+                                             "so any grid cell can be opened to the trades behind it")
     a = ap.parse_args(argv)
 
     here = REPO / "strategies" / a.strategy
@@ -516,6 +540,7 @@ def main(argv=None) -> int:
                                discount_only=discount_only)
         closed = [e for e in evs if e["status"] == "closed"]
         for e in evs:
+            e["symbol"] = sym
             b = "unattended" if unattended(e["t_placed"]) else "attended"
             setups[b] += 1
             if events:
@@ -622,6 +647,9 @@ def main(argv=None) -> int:
             print(f"  {h:02d}:00{mark} n    0")
     print("  * = inside the sleep window")
 
+    if a.csv:
+        write_csv(Path(a.csv), grid, DOW, a.bucket_hours)
+        print(f"per-setup rows written to {a.csv}")
     if a.html:
         write_html(a, un, at, setups, filled, by_uhour, by_ubucket, by_dow, grid, DOW, NB)
         print(f"\nreport written to {a.html}")

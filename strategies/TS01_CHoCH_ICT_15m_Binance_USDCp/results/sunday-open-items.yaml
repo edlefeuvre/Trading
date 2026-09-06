@@ -1,0 +1,11 @@
+# Open decisions carried into every Sunday review ("For the Sunday pass" in the filed review).
+# Ed edits this file; the weekly job only reads it. Remove a line when the decision is taken.
+items:
+  - "The concentration finding (6 Sep): the whole measured result sits in 06:00 UTC / Saturday. Per-trade dump of those buckets, drop the top three, then 2024 vs 2025-26 in/out of sample, before any factor is believed."
+  - "Unattended-hours time factor 0.5 (look #9, §10): recommended 3 Sep, not in params.yaml / universe.yaml. The penalty is almost all the 21-24Z block."
+  - "Pool-consumed cancel: implement in the runner or stop hand-applying it - the paper track is not measuring the strategy being traded while the rule lives in a human head."
+  - "daily_loss_stop_r: 3 is documented and enforced nowhere in code - needed before any unattended placement."
+  - "Fee tier: verify, then re-run the filtered base case at maker 0.02% / taker 0.05%."
+  - "AVAX Pine-vs-runner disagreement: run the §10 procedure and commit the Pine source to pine/."
+  - "Stop-offset variant (1/2/3 ticks) from the DOGE and AVAX entries - backtest, not a live change."
+  - "Minimum pool filter: the 6 Sep AVAX ticket carried a 0.43R pool (needs a 71% win rate); the engine only checks the target is beyond entry."

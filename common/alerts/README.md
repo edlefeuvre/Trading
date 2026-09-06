@@ -84,3 +84,28 @@ Lower-case fields become comments (use them for the human label).
 Bot items hold only `TELEGRAM_BOT_TOKEN`. Code: `send(text, to="alerts")` (book
 `trading`, bot Ricky by default) or `Bot("rickyassist_bot", book="investments").send(text, to="portfolio")`.
 CLI: `--show` (books and destinations), `--test --to trading`, `--topics` / `--discover` to find numbers.
+
+## Approvals — Ed's buttons (v1.30, 7 Sep 2026)
+
+`common/alerts/approvals.py`. The Sunday programme posts `PAPER · APPROVAL · TS01` to the
+Approvals topic with an inline keyboard **Apply / Hold / Re-run** (`callback_data`
+`ts01:apply:<proposal id>` etc.). A press, or a reply of `approved` / `hold` / `approved <id>`
+to that message, is authorised against `TELEGRAM_OWNER_ID` (put Ed's numeric Telegram user id in
+the `trading.env` address book, Bitwarden item `telegram/trading`) and runs the strategy's
+`weekly --apply|--hold --proposal <id>` or `weekly --run-now`; the message is edited with the
+outcome. Anyone else gets a toast and nothing happens.
+
+Where the update arrives: whichever process owns the bot's webhook — on the server that is
+Paperclip's webhook, which must call
+
+```python
+from common.alerts.approvals import handle_update
+handle_update(update_json, repo_root=r"C:\Users\Admin\Repos\Trading")
+```
+
+(this repo never writes to `%USERPROFILE%\.config\telegram-webhook\`). For a bot with no
+webhook set, `python -m common.alerts.approvals --poll` long-polls `getUpdates` instead;
+Telegram refuses `getUpdates` while a webhook exists, so the two cannot both run.
+
+Sender additions for this: `Bot.send(..., buttons=[[("label", "callback_data")]])`,
+`Bot.edit(chat_id, message_id, text, buttons=None)`, `Bot.answer_callback(id, text)`.
