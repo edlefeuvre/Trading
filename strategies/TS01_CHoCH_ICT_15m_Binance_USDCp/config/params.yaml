@@ -3,7 +3,7 @@
 # `make check` enforces it. Keys under `meta:` are exempt.
 meta:
   slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-  version: "1.14"
+  version: "1.20"
 
 mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
 

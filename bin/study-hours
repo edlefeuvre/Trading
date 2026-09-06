@@ -1,0 +1,632 @@
+#!/usr/bin/env python3
+r"""bin/study-hours — does TS01's expectancy differ when Ed is asleep?
+
+PRE-REGISTERED before the numbers were seen (3 Sep 2026, look #9):
+
+  Question    Does mean net R per filled setup differ between setups whose FVG bar falls
+              inside Ed's sleep window and those outside it?
+  Comparison  ONE split: unattended (23:00-07:00 Europe/Gibraltar, DST-correct) vs attended.
+              The hourly table this prints is DESCRIPTIVE ONLY and is not the test.
+  Mechanism   TS01 needs the liquidity pool to be real. Overnight in Gibraltar is the Asia
+              session with thin US participation, so a sweep is more likely to be noise and
+              the draw weaker. That is why this is a hypothesis and not calendar mining.
+  Expectation Unattended is WORSE. Declared before running.
+  Decision    A time R factor, applied on top of the per-symbol factor, never above 1.0:
+                1.0  mean R positive and not reliably worse than the attended bucket
+                0.5  negative but the interval spans zero, OR positive but reliably worse
+                0.0  negative with the interval excluding zero
+              "Reliably" = the difference exceeds 2 standard errors. The rule is applied by
+              this script, not by eye after the fact.
+  Caveat      Report composition too. If the unattended bucket has systematically smaller
+              pool R or wider stops, the driver is setup character, not the hour.
+
+  Clocks       The sleep split is keyed on LOCAL time, because the question is about Ed's
+               clock. Every hour-of-day and day-of-week view is keyed on UTC, because those
+               questions are about the market's clock — local hours smear across DST (08:00
+               Gibraltar is 06:00 UTC in summer and 07:00 UTC in winter).
+  Heatmap      The day x hour grid is 168 cells. On ~1,200 trades that is ~7 per cell, which
+               is noise: cells under --min-n are drawn hollow and excluded from any reading.
+               It is there to show structure or its absence, never to nominate a cell.
+
+    python bin/study-hours                       # tier>0 symbols, archive from 2024-01
+    python bin/study-hours --html study.html     # also write the standalone report
+    python bin/study-hours --all --start 2024-01
+    python bin/study-hours --events results/event-days.txt    # secondary bucket, one date per line
+
+First run downloads the monthly archive from data.binance.vision and caches it under
+%USERPROFILE%\.config\trading-data — expect several minutes. No keys, no orders, no Telegram.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import statistics as stats
+import sys
+from pathlib import Path
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from common.data import binance_klines as data          # noqa: E402
+from common.engine import ict_base as engine            # noqa: E402
+
+SLEEP_FROM, SLEEP_TO = 23, 7        # local hours; [23:00, 07:00)
+
+# Gibraltar local time. Windows ships no tz database, so zoneinfo needs the `tzdata`
+# package; if it is absent we apply the EU rule directly — DST from the last Sunday in
+# March 01:00 UTC to the last Sunday in October 01:00 UTC, CEST (UTC+2) inside, CET
+# (UTC+1) outside. That rule has been fixed since 1996, so it is exact for this dataset.
+_TZ = None
+try:
+    from zoneinfo import ZoneInfo
+    _TZ = ZoneInfo("Europe/Gibraltar")
+    TZ_NOTE = "Europe/Gibraltar via zoneinfo"
+except Exception:  # noqa: BLE001 — no tzdata on this machine
+    TZ_NOTE = "Europe/Gibraltar via the built-in EU rule (tzdata not installed)"
+
+
+def _last_sunday(year: int, month: int) -> dt.date:
+    d = dt.date(year, month, 31) if month != 2 else dt.date(year, 2, 28)
+    while d.month != month:
+        d -= dt.timedelta(days=1)
+    return d - dt.timedelta(days=(d.weekday() + 1) % 7)
+
+
+def local_dt(ms: int) -> dt.datetime:
+    """The wall-clock time in Gibraltar for a UTC millisecond timestamp."""
+    u = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+    if _TZ is not None:
+        return u.astimezone(_TZ)
+    start = dt.datetime.combine(_last_sunday(u.year, 3), dt.time(1), dt.timezone.utc)
+    end = dt.datetime.combine(_last_sunday(u.year, 10), dt.time(1), dt.timezone.utc)
+    return u + dt.timedelta(hours=2 if start <= u < end else 1)
+
+
+def load_yaml(p: Path):
+    import yaml
+    with open(p, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def unattended(ms: int) -> bool:
+    h = local_dt(ms).hour
+    return h >= SLEEP_FROM or h < SLEEP_TO
+
+
+def summary(rows: list[dict]) -> dict:
+    R = [r["net_R"] for r in rows]
+    n = len(R)
+    if n == 0:
+        return dict(n=0)
+    sd = stats.stdev(R) if n > 1 else 0.0
+    return dict(n=n, mean=stats.fmean(R), total=sum(R), sd=sd, se=(sd / n ** 0.5) if n else 0.0,
+                win=sum(1 for x in R if x > 0) / n,
+                pool=stats.fmean([r["poolR"] for r in rows]),
+                stop=stats.fmean([r["stop_pct"] for r in rows]))
+
+
+def line(label: str, s: dict, setups: int) -> str:
+    if not s.get("n"):
+        return f"  {label:<12} no filled trades"
+    return (f"  {label:<12} setups {setups:>5}  filled {s['n']:>5} ({100*s['n']/setups:>4.0f}%)  "
+            f"mean {s['mean']:+.3f} R  ± {s['se']:.3f} (1 se)  total {s['total']:+8.1f} R  "
+            f"win {100*s['win']:>4.1f}%  pool {s['pool']:.2f} R  stop {s['stop']:.2f}%")
+
+
+def verdict(a: dict, b: dict) -> tuple[float, str]:
+    """The pre-registered rule. a = unattended, b = attended. Returns (factor, why)."""
+    if not a.get("n"):
+        return 0.5, "no unattended trades in the sample — hold at 0.5 until there are"
+    lo, hi = a["mean"] - 2 * a["se"], a["mean"] + 2 * a["se"]
+    if hi < 0:
+        return 0.0, f"mean {a['mean']:+.3f} R, 2-se interval [{lo:+.3f}, {hi:+.3f}] entirely below zero"
+    if a["mean"] < 0:
+        return 0.5, f"mean {a['mean']:+.3f} R negative but the interval [{lo:+.3f}, {hi:+.3f}] spans zero"
+    if b.get("n"):
+        diff = b["mean"] - a["mean"]
+        se = (a["se"] ** 2 + b["se"] ** 2) ** 0.5
+        if diff > 2 * se:
+            return 0.5, f"positive, but {diff:.3f} R worse than attended vs 2 se = {2*se:.3f} R — reliably worse"
+        return 1.0, f"positive at {a['mean']:+.3f} R and not reliably worse than attended ({diff:+.3f} R, 2 se {2*se:.3f})"
+    return 1.0, f"positive at {a['mean']:+.3f} R"
+
+
+# 3-hour blocks line up with the sessions, which is why they are the default: the bucket
+# means something before the data is looked at, rather than being a convenient width.
+SESSIONS = {(0, 3): "Asia late", (3, 6): "Asia into Europe", (6, 9): "Europe open",
+            (9, 12): "Europe mid", (12, 15): "US pre-open", (15, 18): "US open",
+            (18, 21): "US afternoon", (21, 24): "Asia open"}
+
+
+def bucket_label(b: int, w: int) -> str:
+    lo, hi = b * w, (b + 1) * w
+    return f"{lo:02d}\u2013{hi:02d}"
+
+
+def bucket_note(b: int, w: int) -> str:
+    lo, hi = b * w, (b + 1) * w
+    return SESSIONS.get((lo, hi), "")
+
+
+# ---- standalone HTML report -------------------------------------------------
+# Diverging ramp: blue (positive) <-> red (negative), neutral midpoint. Both arms are
+# lightness-matched pair for pair and monotonic (light steps L .905/.812/.671/.575, dark
+# steps L .34/.44/.55/.66), computed in OKLCH rather than picked by eye. Cell fills are
+# low-contrast by design, so every cell also carries its number in ink — colour is never
+# the only channel.
+RAMP_LIGHT = dict(neg=["#f8d7d3", "#edb0aa", "#d8746e", "#c14e4a"],
+                  pos=["#cde2fb", "#9ec5f4", "#5598e7", "#2a78d6"], zero="#f0efec")
+RAMP_DARK = dict(neg=["#6f000c", "#971a20", "#bd413f", "#e3645f"],
+                 pos=["#003578", "#0050a4", "#1a71cb", "#4294f1"], zero="#383835")
+BANDS = (0.10, 0.25, 0.50)          # |mean R| cut points between the four steps
+
+
+def _step(v: float) -> str:
+    if v == 0:
+        return "var(--d-0)"
+    i = sum(1 for b in BANDS if abs(v) > b)
+    return f"var(--d-{'p' if v > 0 else 'n'}{i + 1})"
+
+
+def _mns(t: str) -> str:
+    return t.replace("-", "−")
+
+
+def _nice(v: float) -> float:
+    """Round a limit outward to a friendly step so bars never clip."""
+    if v <= 0:
+        return 0.0
+    for step in (0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 5.0):
+        if v <= step * 5:
+            import math as _m
+            return _m.ceil(v / step) * step
+    return v
+
+
+def _bars(series, lo, hi, xlab, wide=940, high=250):
+    """Diverging bars: series is [(label, n, mean)]. lo/hi are floors — the scale grows to fit."""
+    vals = [m for _, _, m in series] or [0.0]
+    hi = max(hi, _nice(max(vals) * 1.18))
+    lo = min(lo, -_nice(abs(min(vals)) * 1.28))
+    PL, PR, PT, PB = 52, 14, 20, 48
+    iw, ih = wide - PL - PR, high - PT - PB
+    y0 = PT + ih * (hi / (hi - lo))
+    sc = lambda v: ih * (v / (hi - lo))                                  # noqa: E731
+    bw = iw / len(series)
+    out = []
+    nsteps = [lo, lo / 2, 0, hi / 3, 2 * hi / 3, hi]
+    for v in nsteps:
+        y = y0 - sc(v)
+        out.append(f'<line x1="{PL}" x2="{wide-PR}" y1="{y:.1f}" y2="{y:.1f}" '
+                   f'stroke="{"var(--axis)" if abs(v) < 1e-9 else "var(--grid)"}" stroke-width="{2 if abs(v)<1e-9 else 1}"/>')
+        out.append(f'<text x="{PL-8}" y="{y+4:.1f}" class="ax end">{_mns(f"{v:+.1f}")}</text>')
+    for i, (lab, n, mean) in enumerate(series):
+        x = PL + i * bw
+        bh = max(abs(sc(mean)), 1)
+        by = y0 - sc(mean) if mean > 0 else y0
+        col = "var(--pos)" if mean > 0 else "var(--neg)"
+        out.append(f'<g><title>{lab} — n {n}, mean {mean:+.3f} R</title>'
+                   f'<rect x="{x+2:.1f}" y="{by:.1f}" width="{bw-4:.1f}" height="{bh:.1f}" '
+                   f'rx="{min(4, bw/2-1, bh):.1f}" fill="{col}"/></g>')
+        out.append(f'<text x="{x+bw/2:.1f}" y="{high-PB+16}" class="ax mid">{lab}</text>')
+        out.append(f'<text x="{x+bw/2:.1f}" y="{high-PB+29}" class="ax mid dim">{n}</text>')
+        if abs(mean) > 0.20:
+            ty = by - 6 if mean > 0 else min(by + bh + 13, PT + ih - 2)
+            out.append(f'<text x="{x+bw/2:.1f}" y="{ty:.1f}" class="val mid">{_mns(format(mean, "+.2f"))}</text>')
+    out.append(f'<text x="{PL}" y="{high-4}" class="ax">{xlab}</text>')
+    return f'<svg viewBox="0 0 {wide} {high}" role="img" aria-label="{xlab}">' + "".join(out) + "</svg>"
+
+
+def _heatmap(grid, DOW, min_n, NB, w, notes):
+    CW = max(36, min(112, int(800 / NB)))
+    PL, PT, CH = 46, 46, 40
+    W, H = PL + NB * CW + 10, PT + 7 * CH + 46
+    out = []
+    for b in range(NB):
+        out.append(f'<text x="{PL+b*CW+CW/2:.1f}" y="{PT-22}" class="ax mid">{bucket_label(b, w)}Z</text>')
+        if notes and CW >= 84:
+            out.append(f'<text x="{PL+b*CW+CW/2:.1f}" y="{PT-9}" class="ax mid dim">{bucket_note(b, w)}</text>')
+    for d in range(7):
+        y = PT + d * CH
+        out.append(f'<text x="{PL-10}" y="{y+CH/2+4:.1f}" class="ax end">{DOW[d]}</text>')
+        for b in range(NB):
+            rows = grid[(d, b)]
+            n = len(rows)
+            x = PL + b * CW
+            lb = bucket_label(b, w)
+            if n < min_n:
+                out.append(f'<g><title>{DOW[d]} {lb}Z — n {n}, below the n={min_n} floor, not read</title>'
+                           f'<rect x="{x+1}" y="{y+1}" width="{CW-2}" height="{CH-2}" rx="4" fill="none" '
+                           f'stroke="var(--line)" stroke-width="1"/>'
+                           f'<text x="{x+CW/2:.1f}" y="{y+CH/2+4:.1f}" class="cell dim mid">{n}</text></g>')
+                continue
+            m = sum(r["net_R"] for r in rows) / n
+            out.append(f'<g><title>{DOW[d]} {lb}Z — n {n}, mean {m:+.3f} R</title>'
+                       f'<rect x="{x+1}" y="{y+1}" width="{CW-2}" height="{CH-2}" rx="4" fill="{_step(m)}"/>'
+                       f'<text x="{x+CW/2:.1f}" y="{y+CH/2+1:.1f}" class="cell mid">{_mns(format(m, "+.2f"))}</text>'
+                       f'<text x="{x+CW/2:.1f}" y="{y+CH/2+12:.1f}" class="cell dim mid">{n}</text></g>')
+    out.append(f'<text x="{PL}" y="{H-22}" class="ax">{w}-hour blocks of the FVG bar, UTC · rows are UTC '
+               f'weekday · hollow cells are below n={min_n} and are not read</text>')
+    return f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Mean net R by UTC weekday and hour">' + "".join(out) + "</svg>"
+
+
+def write_html(a, un, at, setups, filled, by_uhour, by_ubucket, by_dow, grid, DOW, NB):
+    from pathlib import Path as _P
+    import datetime as _dt
+
+    allrows = filled["unattended"] + filled["attended"]
+    N = len(allrows)
+    tot = sum(r["net_R"] for r in allrows)
+    diff = at["mean"] - un["mean"]
+    se = (un["se"] ** 2 + at["se"] ** 2) ** 0.5
+    f, why = verdict(un, at)
+
+    W = a.bucket_hours
+    uh = [(f"{h:02d}", len(by_uhour[h]), (summary(by_uhour[h])["mean"] if by_uhour[h] else 0.0)) for h in range(24)]
+    ub = [(bucket_label(b, W), len(by_ubucket[b]), (summary(by_ubucket[b])["mean"] if by_ubucket[b] else 0.0))
+          for b in range(NB)]
+    dw = [(DOW[d], len(by_dow[d]), (summary(by_dow[d])["mean"] if by_dow[d] else 0.0)) for d in range(7)]
+    best = max((v for v in uh if v[1]), key=lambda v: v[2], default=("--", 0, 0.0))
+    bn, bm = best[1], best[2]
+    rest_n, rest_t = N - bn, tot - bm * bn
+    ncell = [len(grid[k]) for k in grid]
+    live = sum(1 for x in ncell if x >= a.min_n)
+
+    def rowsfor(pairs):
+        return "".join(f'<tr><td>{l}</td><td class="n">{n}</td><td class="n">{_mns(f"{m:+.3f}")}</td>'
+                       f'<td class="n">{_mns(f"{m*n:+.1f}")}</td></tr>' for l, n, m in pairs)
+
+    grid_rows = ""
+    for d in range(7):
+        cells = ""
+        for h in range(NB):
+            r = grid[(d, h)]
+            if len(r) >= a.min_n:
+                mv = sum(x["net_R"] for x in r) / len(r)
+                cells += f'<td class="n">{_mns(format(mv, "+.2f"))} <span class="dimtxt">{len(r)}</span></td>'
+            else:
+                cells += f'<td class="n dimtxt">{len(r)}</td>'
+        grid_rows += f"<tr><td>{DOW[d]}</td>{cells}</tr>"
+
+    css = """
+:root{color-scheme:light;--page:#f4f4f2;--surface:#fcfcfb;--surface-2:#f7f7f4;--ink:#0b0b0b;
+ --ink-2:#52514e;--ink-3:#7c7b76;--line:#e3e2dd;--grid:#e9e8e3;--axis:#b6b5ae;--band:#efeee9;
+ --pos:#2a78d6;--neg:#e34948;--flag:#fab219;--d-0:#f0efec;
+ --d-n1:#f8d7d3;--d-n2:#edb0aa;--d-n3:#d8746e;--d-n4:#c14e4a;
+ --d-p1:#cde2fb;--d-p2:#9ec5f4;--d-p3:#5598e7;--d-p4:#2a78d6;
+ --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+ --serif:Georgia,"Times New Roman",serif;}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--page:#121211;--surface:#1a1a19;
+ --surface-2:#201f1e;--ink:#fff;--ink-2:#c3c2b7;--ink-3:#8d8c84;--line:#2e2e2b;--grid:#272724;
+ --axis:#4e4e4a;--band:#232320;--pos:#3987e5;--neg:#e66767;--d-0:#383835;
+ --d-n1:#6f000c;--d-n2:#971a20;--d-n3:#bd413f;--d-n4:#e3645f;
+ --d-p1:#003578;--d-p2:#0050a4;--d-p3:#1a71cb;--d-p4:#4294f1;}}
+:root[data-theme="dark"]{--page:#121211;--surface:#1a1a19;--surface-2:#201f1e;--ink:#fff;
+ --ink-2:#c3c2b7;--ink-3:#8d8c84;--line:#2e2e2b;--grid:#272724;--axis:#4e4e4a;--band:#232320;
+ --pos:#3987e5;--neg:#e66767;--d-0:#383835;
+ --d-n1:#6f000c;--d-n2:#971a20;--d-n3:#bd413f;--d-n4:#e3645f;
+ --d-p1:#003578;--d-p2:#0050a4;--d-p3:#1a71cb;--d-p4:#4294f1;}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px/1.62 var(--sans);
+ -webkit-font-smoothing:antialiased}
+.wrap{max-width:1010px;margin:0 auto;padding:34px 22px 70px}
+header{border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:24px}
+.kicker{font:600 11px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+h1{font:600 30px/1.2 var(--serif);margin:9px 0 6px;letter-spacing:-.01em}
+.sub{color:var(--ink-2);font-size:14px;margin:0}
+h2{font:600 19px/1.3 var(--serif);margin:34px 0 10px}
+h3{font:600 13px/1.3 var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin:22px 0 8px}
+p{margin:0 0 12px;max-width:74ch}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:16px 0}
+.verdict{border-left:4px solid var(--flag)}.verdict .big{font:600 26px/1.15 var(--serif);margin:0 0 8px}
+.warn{border-left:4px solid var(--neg)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);
+ border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:18px 0}
+.tile{background:var(--surface);padding:15px 17px}
+.tile .k{font:600 10px/1 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.tile .v{font:600 23px/1.15 var(--serif);margin:7px 0 3px;font-variant-numeric:tabular-nums}
+.tile .n{font-size:12px;color:var(--ink-2);line-height:1.45}
+.neg{color:var(--neg)}.pos{color:var(--pos)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{font:600 10.5px/1.3 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+ border-bottom:1px solid var(--axis)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.grid-t{font-size:10.5px}.grid-t td,.grid-t th{padding:3px 4px}.dimtxt{color:var(--ink-3);font-size:9px}
+.figure{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 16px 8px;margin:14px 0;
+ overflow-x:auto}
+.figure figcaption{font-size:12.5px;color:var(--ink-2);padding:0 6px 8px;margin:0}
+svg{display:block;width:100%;height:auto;overflow:visible;min-width:720px}
+text{font-family:var(--sans)}
+.ax{font-size:11px;fill:var(--ink-3)}.ax.dim{font-size:10px;fill:var(--axis)}
+.val{font-size:11.5px;font-weight:600;fill:var(--ink-2);font-family:var(--mono)}
+.cell{font-size:10px;font-weight:600;fill:var(--ink);font-family:var(--mono)}
+.cell.dim{font-size:8.5px;font-weight:400;fill:var(--ink);fill-opacity:.62}
+.mid{text-anchor:middle}.end{text-anchor:end}
+.legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--ink-2);padding:4px 6px 12px}
+.sw{width:26px;height:13px;border-radius:3px;display:inline-block}
+.swr{display:flex;gap:2px;align-items:center}
+code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:4px}
+ol,ul{max-width:74ch;padding-left:22px;margin:0 0 12px}li{margin:0 0 7px}
+details{margin:12px 0}summary{cursor:pointer;font-size:13px;color:var(--ink-2);font-weight:600}
+.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+@media print{body{background:#fff}.wrap{padding:0}.card,.figure,.tiles{break-inside:avoid}svg{min-width:0}}
+"""
+    lg = ('<div class="legend"><span>Mean R</span>'
+          + '<span class="swr">' + "".join(f'<span class="sw" style="background:var(--d-n{i})"></span>' for i in (4, 3, 2, 1))
+          + f'<span class="sw" style="background:var(--d-0)"></span>'
+          + "".join(f'<span class="sw" style="background:var(--d-p{i})"></span>' for i in (1, 2, 3, 4)) + '</span>'
+          + '<span>− 0.50 · 0.25 · 0.10 · 0 · 0.10 · 0.25 · 0.50 +</span>'
+          + f'<span>hollow = n &lt; {a.min_n}</span></div>')
+
+    html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TS01 hours and days study</title><style>{css}</style></head><body><div class="wrap">
+<header><div class="kicker">TS01 CHoCH ICT 15m · Binance USDCp · look #9</div>
+<h1>Blocks, days, and whether any of it survives</h1>
+<p class="sub">{sum(setups.values()):,} setups · {N:,} filled · archive from {a.start} ·
+generated {_dt.datetime.now(_dt.timezone.utc):%d %b %Y %H:%M} UTC</p></header>
+
+<div class="card verdict"><p class="big">Unattended R factor {f}</p>
+<p style="margin:0">{why}. The sleep split is the only pre-registered comparison here and it is keyed on
+<strong>local</strong> time, because it is a question about Ed's clock. Everything below it is keyed on
+<strong>UTC</strong>, because those are questions about the market's clock.</p></div>
+
+<div class="tiles">
+<div class="tile"><div class="k">Unattended</div><div class="v {'neg' if un['mean']<0 else 'pos'}">{_mns(f"{un['mean']:+.3f}")} R</div>
+<div class="n">{un['n']} filled · total {_mns(f"{un['total']:+.1f}")} R · win {100*un['win']:.1f}%</div></div>
+<div class="tile"><div class="k">Attended</div><div class="v {'neg' if at['mean']<0 else 'pos'}">{_mns(f"{at['mean']:+.3f}")} R</div>
+<div class="n">{at['n']} filled · total {_mns(f"{at['total']:+.1f}")} R · win {100*at['win']:.1f}%</div></div>
+<div class="tile"><div class="k">Difference</div><div class="v">{_mns(f"{diff:+.3f}")} R</div>
+<div class="n">{abs(diff)/se:.1f} standard errors · {'reliable' if abs(diff)>2*se else 'not reliable'}</div></div>
+<div class="tile"><div class="k">Whole strategy</div><div class="v">{_mns(f"{tot/N:+.3f}")} R</div>
+<div class="n">{N:,} filled · total {_mns(f"{tot:+.1f}")} R</div></div></div>
+
+<h2>{W}-hour blocks, UTC</h2>
+<p>The earlier run keyed the hours on Gibraltar local time, which smears the market clock: 08:00 local is
+06:00 UTC in summer and 07:00 UTC — the London open — in winter, so one bucket mixed two sessions. This is
+the corrected view, and it is grouped into {W}-hour blocks: {NB} buckets at roughly {N//NB} trades each
+rather than 24 at {N//24}. Blocks are not just a convenient width — at three hours they line up with the
+sessions, so each bucket means something before the data is looked at.</p>
+<p><strong>Two honest costs.</strong> Aggregation buys precision by spending resolution: if a real effect
+lives in one hour, a three-hour block dilutes it threefold and can hide it. And the boundary
+<em>offset</em> is a free choice — blocks starting at 01:00Z would give different numbers. It is pinned at
+00:00Z and is not exposed as a knob, because shifting it until something appears is exactly the search
+that manufactures findings.</p>
+<figure class="figure">{_bars(ub, -0.5, 1.0, f'{W}-hour block of the FVG bar, UTC · small figure = n', 940, 260)}
+<figcaption>{NB} buckets is {NB} looks. Read this for shape, not for a winner.</figcaption></figure>
+<details><summary>Hour by hour — the finest resolution, for checking whether a block hides a spike</summary>
+<figure class="figure" style="margin-top:10px">{_bars(uh, -0.5, 1.0, 'hour of the FVG bar, UTC · small figure = n')}
+<figcaption>If one hour inside a block carries it, the block was the wrong unit.</figcaption></figure></details>
+
+<div class="card warn"><p style="margin:0 0 8px"><strong>The concentration test.</strong> The best UTC hour
+is {best[0]}:00Z: n={bn}, mean {_mns(f"{bm:+.3f}")} R, total {_mns(f"{bm*bn:+.1f}")} R —
+{100*abs(bm*bn)/abs(tot) if tot else 0:.0f}% of the strategy's whole result from {100*bn/N:.1f}% of its trades.</p>
+<p style="margin:0">Without that single hour the remaining {rest_n:,} trades total
+{_mns(f"{rest_t:+.1f}")} R, a mean of {_mns(f"{rest_t/rest_n:+.4f}")} R.
+Deleting the best of twenty-four buckets is a biased operation and proves nothing on its own — do it to a
+genuinely edgeless strategy and you would see the same. What matters is whether the hour sits further from
+the pack than chance across 24 looks would put it. Check the standard error against the bucket's n before
+believing it, and get the per-trade distribution before acting on it.</p></div>
+
+<details><summary>Table view — UTC hours (all 24)</summary><table><thead><tr><th>Hour UTC</th><th class="n">n</th>
+<th class="n">Mean R</th><th class="n">Total R</th></tr></thead><tbody>{rowsfor(uh)}</tbody></table></details>
+
+<h2>Day of week, UTC</h2>
+<p>Seven buckets at roughly {N//7} trades each — the least thin cut available, and crypto weekends have a
+plausible mechanism behind them in thinner books. Still seven looks, so the same discipline applies: this is
+a hypothesis generator, not a result.</p>
+<figure class="figure">{_bars(dw, -0.5, 1.0, 'UTC weekday of the FVG bar · small figure = n', 700, 240)}
+<figcaption>Mean net R per filled setup by UTC weekday.</figcaption></figure>
+<details><summary>Table view — weekdays</summary><table><thead><tr><th>Day</th><th class="n">n</th>
+<th class="n">Mean R</th><th class="n">Total R</th></tr></thead><tbody>{rowsfor(dw)}</tbody></table></details>
+
+<h2>Day × block</h2>
+<p>{7*NB} cells over {N:,} trades is {N/(7*NB):.1f} per cell. {live} of {7*NB} clear the n={a.min_n} floor; the
+rest are drawn hollow with their count only, and should not be read at all. Even at {W}-hour blocks this is a
+thin grid, and a thin grid <em>will</em> look patterned whether or not anything is there — that is what noise
+looks like when you cut it two ways at once. The honest use of this picture is to ask whether the block shape
+above holds steady down the columns. If it does not, the block reading was never structure.</p>
+{lg}
+<figure class="figure">{_heatmap(grid, DOW, a.min_n, NB, W, True)}
+<figcaption>Mean net R by UTC weekday and {W}-hour block. Colour and the printed number carry the same
+value, so the cells stay readable without colour.</figcaption></figure>
+<details><summary>Table view — the full grid</summary><table class="grid-t"><thead><tr><th></th>
+{"".join(f'<th class="n">{bucket_label(b, W)}</th>' for b in range(NB))}</tr></thead><tbody>{grid_rows}</tbody></table></details>
+
+<h2>What this does and does not license</h2>
+<ol>
+<li><strong>The sleep-window factor stands as the only actionable output</strong>, and only as a
+recommendation to the Sunday review. It is not written into <code>params.yaml</code>.</li>
+<li><strong>No hour or day filter should be adopted from this page.</strong> Every cut below the
+pre-registered split is exploratory and was chosen after seeing the data.</li>
+<li><strong>If a cut looks compelling, pre-register it and test it out of sample</strong> — write the
+hypothesis and expected direction in §10 first, then split 2024 against 2025–26.</li>
+<li><strong>Get the per-trade distribution</strong> for any bucket that carries the result. A mean built
+from two outsized winners is not a session effect.</li>
+</ol>
+
+<div class="foot"><p style="margin:0 0 4px">Generated by <code>bin/study-hours --html</code>. The
+pre-registration — hypothesis, mechanism, expected direction and decision rule — is in
+<code>STRATEGY.md</code> §10 and was fixed before the first run.</p>
+<p style="margin:0">Every view except the sleep split is post-hoc and labelled as such.</p></div>
+</div></body></html>"""
+    _P(a.html).write_text(html, encoding="utf-8")
+
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--strategy", default="TS01_CHoCH_ICT_15m_Binance_USDCp")
+    ap.add_argument("--start", default="2024-01", help="archive start, YYYY-MM")
+    ap.add_argument("--all", action="store_true", help="include R-factor-0 symbols too")
+    ap.add_argument("--events", default="", help="file of dates (YYYY-MM-DD), one per line, for a secondary bucket")
+    ap.add_argument("--html", default="", help="also write a standalone HTML report to this path")
+    ap.add_argument("--bucket-hours", type=int, default=3, choices=[1, 2, 3, 4, 6, 8, 12],
+                    help="width of the hour-of-day buckets, UTC (default 3). The boundary OFFSET is fixed "
+                         "at 00:00Z; shifting it is another look, so it is deliberately not a knob.")
+    ap.add_argument("--min-n", type=int, default=15, help="heatmap cells below this n are drawn hollow and never read")
+    a = ap.parse_args(argv)
+
+    here = REPO / "strategies" / a.strategy
+    params = load_yaml(here / "config" / "params.yaml")
+    universe = load_yaml(here / "config" / "universe.yaml")
+    entry, structure = params.get("entry", {}), params.get("structure", {})
+    k = int(structure.get("pivot_k", engine.K))
+    live_bars = int(entry.get("gtc_window_bars", engine.LIVE_BARS))
+    sweep_reclaim = int(entry.get("sweep_reclaim_bars", engine.SWEEP_RECLAIM))
+    fvg_window = int(entry.get("gap_window_bars", engine.FVG_WINDOW))
+    discount_only = bool(entry.get("discount_only", True))
+    tf = str(params.get("timeframe", "15m"))
+
+    syms = [str(r["symbol"]).upper() for r in universe.get("symbols", [])
+            if isinstance(r, dict) and (a.all or float(r.get("tier", 0) or 0) > 0)]
+    y, m = (int(x) for x in a.start.split("-"))
+
+    events = set()
+    if a.events:
+        for ln in Path(a.events).read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                events.add(ln)
+
+    print(__doc__.split("First run")[0].rstrip())
+    print(f"\nsymbols {len(syms)} · archive from {a.start} · sleep window {SLEEP_FROM:02d}:00-{SLEEP_TO:02d}:00 "
+          f"local · {TZ_NOTE}\n")
+
+    setups = {"unattended": 0, "attended": 0}
+    filled: dict[str, list[dict]] = {"unattended": [], "attended": []}
+    ev_setups, ev_filled = {"event": 0, "other": 0}, {"event": [], "other": []}
+    by_hour: dict[int, list[dict]] = {h: [] for h in range(24)}      # LOCAL, kept for continuity
+    by_uhour: dict[int, list[dict]] = {h: [] for h in range(24)}     # UTC — the market clock
+    by_dow: dict[int, list[dict]] = {d: [] for d in range(7)}        # UTC weekday, Mon=0
+    NB = 24 // a.bucket_hours
+    by_ubucket: dict[int, list[dict]] = {b: [] for b in range(NB)}
+    grid: dict[tuple, list[dict]] = {(d, b): [] for d in range(7) for b in range(NB)}
+
+    for sym in syms:
+        try:
+            bars = data.history(sym, start=(y, m), interval=tf, verbose=False)
+        except Exception as ex:  # noqa: BLE001
+            print(f"  {sym:<14} ERROR {ex}")
+            continue
+        if len(bars) < 500:
+            print(f"  {sym:<14} only {len(bars)} bars — skipped")
+            continue
+        evs = engine.live_state(bars, k=k, live_bars=live_bars, report_all=True,
+                               sweep_reclaim=sweep_reclaim, fvg_window=fvg_window,
+                               discount_only=discount_only)
+        closed = [e for e in evs if e["status"] == "closed"]
+        for e in evs:
+            b = "unattended" if unattended(e["t_placed"]) else "attended"
+            setups[b] += 1
+            if events:
+                d = local_dt(e["t_placed"]).strftime("%Y-%m-%d")
+                ev_setups["event" if d in events else "other"] += 1
+        for e in closed:
+            b = "unattended" if unattended(e["t_placed"]) else "attended"
+            filled[b].append(e)
+            by_hour[local_dt(e["t_placed"]).hour].append(e)
+            u = dt.datetime.fromtimestamp(e["t_placed"] / 1000, dt.timezone.utc)
+            by_uhour[u.hour].append(e)
+            by_dow[u.weekday()].append(e)
+            by_ubucket[u.hour // a.bucket_hours].append(e)
+            grid[(u.weekday(), u.hour // a.bucket_hours)].append(e)
+            if events:
+                d = local_dt(e["t_placed"]).strftime("%Y-%m-%d")
+                ev_filled["event" if d in events else "other"].append(e)
+        print(f"  {sym:<14} {len(bars):>7} bars · {len(evs):>4} setups · {len(closed):>4} filled")
+
+    un, at = summary(filled["unattended"]), summary(filled["attended"])
+    print("\n=== THE PRE-REGISTERED SPLIT ===")
+    print(line("unattended", un, setups["unattended"] or 1))
+    print(line("attended", at, setups["attended"] or 1))
+    if un.get("n") and at.get("n"):
+        diff = at["mean"] - un["mean"]
+        se = (un["se"] ** 2 + at["se"] ** 2) ** 0.5
+        print(f"\n  attended minus unattended: {diff:+.3f} R · se {se:.3f} · "
+              f"{'RELIABLE at 2 se' if abs(diff) > 2*se else 'NOT reliable at 2 se'}")
+        print(f"  smallest difference this sample could resolve at 2 se: {2*se:.3f} R")
+        print("  (the strategy's whole measured edge is +0.02 to +0.11 R — if the resolution above")
+        print("   is larger than that, this test can only find a big effect, not a subtle one)")
+    f, why = verdict(un, at)
+    print(f"\n  PRE-REGISTERED VERDICT — unattended R factor {f}: {why}")
+    print(f"  Apply as risk = ceiling x symbol_factor x {f}. Never above 1.0. Charter clause 3 permits")
+    print("  sizing down only, so this needs no further argument; raising it later would.")
+
+    if events:
+        e1, e2 = summary(ev_filled["event"]), summary(ev_filled["other"])
+        print("\n=== SECONDARY: event days (descriptive, underpowered by design) ===")
+        print(line("event", e1, ev_setups["event"] or 1))
+        print(line("other", e2, ev_setups["other"] or 1))
+        if e1.get("n"):
+            print(f"  n = {e1['n']}. At sd {e1['sd']:.2f} the 2-se resolution is "
+                  f"{2*e1['se']:.3f} R. Treat as description, not evidence.")
+
+    DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    print(f"\n=== DESCRIPTIVE ONLY — {a.bucket_hours}h blocks of the FVG bar, UTC ===")
+    print(f"  ({NB} buckets is {NB} looks — fewer than 24, and each is ~{a.bucket_hours}x less thin)")
+    for b in range(NB):
+        rows = by_ubucket[b]
+        note = bucket_note(b, a.bucket_hours)
+        if rows:
+            t = summary(rows)
+            print(f"  {bucket_label(b, a.bucket_hours)}Z  n {t['n']:>4}  mean {t['mean']:+.3f} R  "
+                  f"± {t['se']:.3f}  total {t['total']:+7.1f}  win {100*t['win']:>4.1f}%  {note}")
+        else:
+            print(f"  {bucket_label(b, a.bucket_hours)}Z  n    0  {note}")
+
+    print("\n=== DESCRIPTIVE ONLY — hour of the FVG bar, UTC (finest resolution) ===")
+    print("  (24 buckets is 24 looks; do not read a winner out of this table)")
+    for h in range(24):
+        rows = by_uhour[h]
+        if rows:
+            t = summary(rows)
+            print(f"  {h:02d}:00Z n {t['n']:>4}  mean {t['mean']:+.3f} R  total {t['total']:+7.1f}  win {100*t['win']:>4.1f}%")
+        else:
+            print(f"  {h:02d}:00Z n    0")
+
+    print("\n=== DESCRIPTIVE ONLY — day of week, UTC ===")
+    print("  (7 buckets is 7 looks)")
+    for d in range(7):
+        rows = by_dow[d]
+        if rows:
+            t = summary(rows)
+            print(f"  {DOW[d]}  n {t['n']:>4}  mean {t['mean']:+.3f} R  total {t['total']:+7.1f}  win {100*t['win']:>4.1f}%")
+        else:
+            print(f"  {DOW[d]}  n    0")
+
+    print(f"\n=== DESCRIPTIVE ONLY — day x {a.bucket_hours}h block, UTC · mean R · "
+          f"cells with n < {a.min_n} shown as . ===")
+    print("      " + "".join(f"{bucket_label(b, a.bucket_hours):>9}" for b in range(NB)))
+    for d in range(7):
+        cells = []
+        for b in range(NB):
+            rows = grid[(d, b)]
+            cells.append(f"{summary(rows)['mean']:>+9.2f}" if len(rows) >= a.min_n else f"{'.':>9}")
+        print(f"  {DOW[d]} " + "".join(cells))
+    ncell = [len(grid[k]) for k in grid]
+    NC = 7 * NB
+    print(f"  {NC} cells, {sum(ncell)} trades, mean {sum(ncell)/NC:.1f} per cell, "
+          f"{sum(1 for x in ncell if x >= a.min_n)} at or above n={a.min_n}")
+    print("  A grid this thin will look patterned whether or not anything is there. It is here to")
+    print("  show whether structure survives being cut two ways at once — usually it does not.")
+
+    print("\n=== DESCRIPTIVE ONLY — hour of the FVG bar, local (superseded by the UTC table above) ===")
+    print("  (24 buckets is 24 looks; do not read a winner out of this table)")
+    for h in range(24):
+        rows = by_hour[h]
+        mark = " *" if (h >= SLEEP_FROM or h < SLEEP_TO) else "  "
+        if rows:
+            s = summary(rows)
+            print(f"  {h:02d}:00{mark} n {s['n']:>4}  mean {s['mean']:+.3f} R  total {s['total']:+7.1f}  win {100*s['win']:>4.1f}%")
+        else:
+            print(f"  {h:02d}:00{mark} n    0")
+    print("  * = inside the sleep window")
+
+    if a.html:
+        write_html(a, un, at, setups, filled, by_uhour, by_ubucket, by_dow, grid, DOW, NB)
+        print(f"\nreport written to {a.html}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

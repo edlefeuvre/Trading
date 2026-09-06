@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.14
+version: 1.20
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -247,6 +247,7 @@ deviations in the journal; they do not count toward row 6.
 | | |
 |---|---|
 | Runner | Windows Task Scheduler task `TS01-runner`: `python -m strategies.TS01_CHoCH_ICT_15m_Binance_USDCp.src.runner` from `%USERPROFILE%\Repos\Trading`, every 15 min at hh:00:30 / 15:30 / 30:30 / 45:30 (30 s after bar close so the closed candle is final), 10-min limit, 3 restarts a minute apart. Registered by `deploy\windows\register-ts01-runner.ps1`. Runs alongside `CHoCH watcher` until they agree, then the old task is disabled. |
+| `deploy/windows/update-server.ps1` | ops | 1.20 | One pass over the server: integrity, tasks, credentials, detection, reports, study, daily, git. Read-only unless `-RegisterTasks` or `-Commit` |
 | Scheduled jobs | `TS01-weekly` Sundays 08:00 local → `src/weekly.py` (§8a). Book-level: `TRADING-daily` 07:00 local → `common/reports/daily.py` (every strategy + OUTSIDE STRATEGIES, to Digest); `TS-secrets-sync` hourly (optional) |
 | Credentials | by provider under `%USERPROFILE%\.config\`: `binance\SERVER_RO.env` (Enable Reading only — reconciliation, reports, Sunday programme), `binance\SERVER_TRADING_RW.env` (Enable Futures only — order placement, created only after the paper gate), `telegram\rickyassist_bot.env`. The Investment Book uses its own `SERVER_INVEST_RW` (margin loan / options), never shared with Trading. No server key has withdrawals or transfers. All IP-restricted. Bitwarden is the master; `sync-secrets.ps1` refreshes the files. |
 | Logs | `logs/TS01-runner.jsonl` — one JSON line per cycle (symbols, events sent, errors, exchange counts) plus reconcile failures; Task Scheduler history for the process itself |
@@ -353,6 +354,32 @@ the R columns are filled by the first run of `src/weekly.py`, which is
 spec as kept **+0.163R** vs discarded −0.058R, n=522. Engine run not yet filed
 under `results/`; reconcile with the 31 Aug figures below before citing either.
 
+**2026-09-03 · unattended vs attended hours (look #9, pre-registered in §10)** —
+15 symbols, archive Jan 2024 to date, 1,910 setups / 1,216 filled. Unattended
+(23:00–07:00 Gibraltar) 351 filled at **−0.057R** (1 se 0.074), win 41.6%;
+attended 865 filled at **+0.061R** (1 se 0.050), win 45.7%. Difference +0.118R at
+1.3 se, p ≈ 0.19 — **direction as predicted, not reliable**; 2-se resolution is
+0.179R against a whole-strategy edge of +0.027R, and reaching reliability needs
+~2.3× the data. Composition check **passed**: pool 1.73 vs 1.81R, stop 0.91 vs
+1.00%, fill 63 vs 64% — the setups are alike, so the gap is win rate, not setup
+character. With winners realising ~1.4R and losers ~1.07R, break-even is ~44%:
+attended clears it by 1.7 points, unattended misses by 2.3. **Pre-registered
+verdict: unattended R factor 0.5** — recommended to Sunday, NOT implemented in
+`params.yaml` or `universe.yaml`.
+
+**2026-09-03 · the 08:00 concentration (post-hoc, flagged as such)** — the
+attended bucket's edge is one hour. 08:00 local: n=56, mean +0.825R, total
++46.2R = **87% of the attended total from 6.5% of its trades**. Attended without
+it is +0.009R over 809; **the whole strategy without it is −0.011R over 1,160
+(−13.0R)**. Dropping the best of 24 buckets is itself a biased operation and
+proves little on its own — but at ~5 se above the overall mean it is beyond what
+multiplicity explains, and the winners in that hour imply a ~2.6R average pool
+against ~1.4R elsewhere. Two readings remain open: a real pre-open session effect,
+or a few outsized winners in a thin bucket. **Blocking caveat:** hour buckets are
+keyed on *local* time, so 08:00 is 06:00 UTC in summer and 07:00 UTC (London open)
+in winter — the bucket mixes sessions. Re-run keyed on UTC (`bin/study-hours` does this from v1.18) and print the
+per-trade R for that hour before anyone believes it. Bears on gate rows 1 and 5.
+
 **2026-08-31 · pool-consumed filter, first look** — the nine symbols in the book
 that day (later widened to 21), 764 setups, dataset 2024-01-04 → present, maker 0% / taker 0.04% on stops. Kept 351
 at **+0.112R (t = +1.2)** vs discarded 413 at −0.058R; unfiltered baseline
@@ -389,6 +416,38 @@ exists and is mostly pool consumption, so the window needs no change. Look #3.
 
 **Fee tier** — verify, then re-run the filtered base case at maker 0.02% /
 taker 0.05%.
+
+**Unattended hours — a time R factor** (declared 3 Sep 2026 BEFORE the numbers were
+seen; **RUN 3 Sep — see §9 for the result**; look #9). Question: does mean net R per filled setup differ between setups
+whose FVG bar falls in Ed's sleep window (23:00–07:00 Europe/Gibraltar,
+DST-correct) and those outside it? **One** comparison — the hourly table
+`bin/study-hours` prints is descriptive only. Mechanism: TS01 needs the pool to
+be real, and overnight in Gibraltar is the Asia session with thin US
+participation, so a sweep is likelier to be noise and the draw weaker — a
+hypothesis, not calendar mining. **Declared expectation: unattended is worse.**
+Decision rule, applied by the script rather than by eye: unattended factor 1.0 if
+the bucket's mean R is positive and not worse than attended by more than 2 se;
+0.5 if negative with an interval spanning zero, or positive but reliably worse;
+0.0 if negative with the 2-se interval entirely below zero. Applied as
+`risk = ceiling × symbol_factor × time_factor`, never above 1.0 — charter clause
+3 permits sizing down only, which is why this needs no further argument and
+raising it later would. Composition (pool R, stop %) is reported per bucket: if
+the unattended bucket carries systematically smaller pools the driver is setup
+character, not the hour. Live sample as at 3 Sep, for context only: 5 unattended
+filled for −5.37R and 4 attended for +1.13R, but the attended figure rests
+entirely on the two setups the pool rule discarded, whose paper results are the
+least trustworthy in the set.
+
+**Event days (NFP / CPI / FOMC)** — raised 3 Sep, **not** run as a test. About 32
+NFP days in the dataset at 0.79 setups/day gives n ≈ 25, which cannot separate a
+0.3R effect from noise, and calendar slicing is the most reliable way to
+manufacture a spurious edge. Two things follow. Treating a release as a **risk**
+blackout needs no statistics and is a legitimate pre-commitment; the exposure is
+not the release minute but the 32-bar (8h) window, so a setup at 08:00 UTC rests
+straight through a 12:30 UTC print. If it is ever run as an **expectancy**
+question, pool NFP + CPI + FOMC into one bucket (n ≈ 90–100) and report it as
+description. `bin/study-hours --events` supports the bucket and labels it
+underpowered by design.
 
 **Pool-consumed filter — two live counter-observations (1–3 Sep 2026)**, logged
 against look #2. `exit.pool_consumed_cancel` is **false**: researched 31 Aug,
@@ -453,6 +512,12 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-03 | 1.20 | §6, §8 | `deploy/windows/update-server.ps1`: one pass over the server — version and integrity, scheduled tasks (with `-RegisterTasks` to create any missing), SERVER_RO reachability, `scan-now`, `trade-report`, `study-hours --html`, the daily report, and git. Every step prints PASS/WARN/FAIL and execution continues, so one failure cannot hide the rest; it changes no parameter and places no order. Its summary lists what still needs a human and what is parked for the Sunday review. | `deploy/windows/update-server.ps1`, `STRATEGY.md` |
+| 2026-09-03 | 1.19 | §6 | `bin/study-hours --bucket-hours` (default 3): hour-of-day and the day-hour grid now aggregate into UTC blocks, cutting 24 looks to 8 and the grid from 168 thin cells to 56. At three hours the blocks coincide with the sessions, so each means something before the data is seen. The boundary offset is pinned at 00:00Z and deliberately not exposed — shifting it until something appears is the search that manufactures findings. The 1h view is kept as the resolution check, since a block hides an effect that lives in one hour. | `bin/study-hours`, `STRATEGY.md` |
+| 2026-09-03 | 1.18 | §6, §9 | `bin/study-hours` re-keyed: the sleep split stays on LOCAL time (it is a question about Ed's clock) while every hour-of-day and new day-of-week view uses UTC (the market's clock), fixing the DST smearing noted at 1.17. Adds a UTC weekday cut, a 7x24 day-hour heatmap whose sub-`--min-n` cells are drawn hollow and excluded, and `--html` to write the standalone report itself. Diverging ramp computed in OKLCH, both arms lightness-matched and monotonic; every cell prints its value so colour is never the only channel. | `bin/study-hours`, `STRATEGY.md` |
+| 2026-09-03 | 1.17 | §9, §10 | Look #9 run: unattended −0.057R vs attended +0.061R, difference 1.3 se — direction as predicted, not reliable; composition check passed; pre-registered verdict unattended R factor 0.5, recommended to Sunday and NOT implemented. Post-hoc: 87% of the attended edge sits in the 08:00 local bucket (n=56) and the whole strategy is −0.011R without it — flagged, with the local-hour/UTC smearing caveat. | `STRATEGY.md` |
+| 2026-09-03 | 1.16 | §6 | `bin/study-hours` no longer needs a system tz database: Windows ships none, so `zoneinfo` raised `ZoneInfoNotFoundError` without the `tzdata` package. It now falls back to the EU DST rule (last Sunday in March to last Sunday in October, 01:00 UTC), verified against `zoneinfo` on 105,216 quarter-hour instants across 2024-2026 with zero mismatches; `tzdata` added to `requirements.txt` for Windows so the real database is used when present. | `bin/study-hours`, `requirements.txt` |
+| 2026-09-03 | 1.15 | §6, §10 | `bin/study-hours`: the pre-registered unattended-vs-attended split (look #9) with its decision rule for a time R factor, plus an optional event-day bucket labelled underpowered. Hypothesis, mechanism, expected direction and rule all recorded in §10 before the study was run. | `bin/study-hours`, `STRATEGY.md` |
 | 2026-09-03 | 1.14 | §6, §10 | `bin/scan-now` (state-free view of what the engine sees now; the runner's dedupe makes `runner --backfill` useless as a detection check) and `bin/trade-report` (one record per setup + paper-track register, statuses from `results/trade-status.yaml`). §10 records the two-track validation and two live counter-observations on the pool-consumed filter. | `bin/scan-now`, `bin/trade-report`, `results/trade-status.yaml`, `STRATEGY.md` |
 | 2026-09-03 | 1.13 | §3, §6, §10 | `binance.py`: `Client.history(symbol, hours)` and `--history SYMBOL` CLI — orders, conditional orders, fills with trade ids and maker/taker, income — for journal entries (read-only). §10 gains two open questions from the DOGE and AVAX entries: the Pine-vs-runner disagreement on AVAX (Pine inputs never aligned; `pine/` still empty) and the stop-offset variant. §3 records that `sweep_reclaim_bars` counts the anchor bar and `gap_window_bars` does not. | `common/exchange/binance.py`, `STRATEGY.md` |
 | 2026-09-03 | 1.12 | §5 | Reconciliation now reads Binance's Conditional orders (Algo Order service, `/fapi/v1/openAlgoOrders`) as well as basic orders: a stop-market/take-profit in the Conditional tab counts as the ticket's stop/target (first live case: AVAX stop was there, runner said NO STOP). Exchange line names the trigger type (`stop on exchange (last trigger)`); when conditional orders cannot be read the runner says `stop unknown` and never alerts NO STOP. Daily statement lists conditional orders too (`all` for close-position stops). | `src/runner.py`, `common/exchange/binance.py`, `common/reports/daily.py`, `src/tests/test_guards.py` |
