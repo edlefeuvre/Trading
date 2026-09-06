@@ -16,3 +16,16 @@ report:
   export_dir: "%USERPROFILE%\\OneDrive\\TRA\\30_Reports"   # HTML statement copied here too (blank to disable)
   attribute_days: 4           # match exchange orders/positions to setups announced within this many days
   price_tolerance_pct: 0.15   # ...and within this % of the ticket's entry/stop/target
+
+# Per-setup trade reports as Google Docs (common/reports/trade_file.py).
+# Credentials: %USERPROFILE%\.config\google\  — see common/drive/gdocs.py --authorise
+drive:
+  enabled: true
+  trade_reports_folder: 1J3NAcjQFZdt1yRYspKpuapWAaylEdYIr   # Drive: _Logs/05 - Wealth/Trading/TS01 trade reports
+
+# Links out to your own TradingView layout. layout_id comes from the chart URL:
+# tradingview.com/chart/<layout_id>/ — blank falls back to a plain symbol chart.
+tradingview:
+  layout_id: "1pkR5u3W"          # Ed's chart with the TS01 indicator
+  exchange: BINANCE
+  suffix: ".P"

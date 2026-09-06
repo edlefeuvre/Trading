@@ -12,6 +12,10 @@ choch_watch.py migrated into the repo on 2 Sep 2026. Detection logic is unchange
   * reconciliation READ via the SERVER_RO Binance key when present: exchange positions
     and open orders go to results/holdings.json and are quoted in every paper-position
     message, so a paper fill can never read as a real one
+  * one living Google Doc per setup (common/reports/trade_file.py): created at SETUP,
+    updated at every event, closed off at the 32-bar window as CLOSED (Traded) or
+    CLOSED (Paper). Its link rides at the bottom of every message for that setup. The
+    Drive call is fail-soft — an outage there must never stop a ticket going out.
   * one JSON line per cycle in logs/TS01-runner.jsonl; an hourly heartbeat to syslog
   * LIVE and SHADOW refuse to start in v0 — order placement is not implemented
 
@@ -32,8 +36,9 @@ from pathlib import Path
 from common.alerts import telegram
 from common.data import binance_klines as data
 from common.engine import ict_base as engine
+from common.reports import trade_file
 
-__version__ = "1.12"
+__version__ = "1.13"
 HERE = Path(__file__).resolve().parent.parent           # strategy folder
 REPO = HERE.parent.parent
 SLUG = HERE.name
@@ -355,11 +360,31 @@ def cycle(params, tiers, mode: str, a) -> dict:
     errors: list[str] = []
     watch = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else [s for s, t in tiers.items() if t > 0]
     st = load_state()
+    book = trade_file.load_book()
+    drive_on = (bool((book.get("drive", {}) or {}).get("enabled", False))
+                and not getattr(a, "stdout", False) and not getattr(a, "no_report", False))
     snap = exchange_snapshot(params)
     filters = data.symbol_filters()
     if not filters:
         errors.append("exchangeInfo unavailable: prices/sizes shown unrounded")
     import re as _re
+
+    def report(rec: dict, event: str, detail: str = "", when_ms: int | None = None,
+               status: str = "", outcome: str = "", exline: str = "") -> str | None:
+        """Append one lifecycle row to this setup's Doc and return its link. Fail-soft."""
+        if not drive_on:
+            return None
+        url = trade_file.sync(book, rec, event, detail,
+                              when(when_ms if when_ms else int(time.time() * 1000)),
+                              status=status, outcome=outcome, exchange_line=exline,
+                              mode=mode.capitalize())
+        if rec.get("report_error"):
+            log_line({"event": "report_failed", "symbol": rec.get("sym"),
+                      "setup": rec.get("t"), "error": rec["report_error"]})
+        return url
+
+    def link(url: str | None) -> list[str]:
+        return [f"Report: {url}"] if url else []
 
     def emit(text: str, to: str = to_main, html: bool = False):
         if a.stdout:
@@ -398,6 +423,15 @@ def cycle(params, tiers, mode: str, a) -> dict:
             record = dict(sym=sym, side=side, entry=T.price, stop=T.sl_trigger,
                           target=T.tp_limit, qty=T.qty, t=tk["t_placed"], ts=TS)   # what a report needs to recognise Ed's order
             m = matching(snap, sym, side, T.price, T.sl_trigger, T.tp_limit)
+            # The stored record IS the trade file's state: events, Doc id, whether anything of
+            # Ed's ever reached the exchange. Mutate it in place so the same Doc keeps updating.
+            rec = st[key] if isinstance(st.get(key), dict) else record
+            rec.update({k: record[k] for k in ("sym", "side", "entry", "stop", "target", "qty", "t", "ts")})
+            rec["ticket"] = T.block() + T.footer()
+            rec["expires"] = tk["t_placed"] + live_bars * 900_000
+            if m["position"] or m["stop_orders"]:
+                rec["traded"] = True                 # a position (or a stop guarding one) is a real trade
+            record = rec
 
             # ---- guards on Ed's real orders (read-only unless manage.auto_cancel_expired) ----
             stops_visible = bool(snap) and snap.get("conditional_ok", True)   # never alert on what we could not read
@@ -405,9 +439,13 @@ def cycle(params, tiers, mode: str, a) -> dict:
                 wkey = f"{key}:nostop:{int(time.time() // 900)}"      # at most once per cycle
                 if not st.get(wkey):
                     p = m["position"]
+                    url = report(rec, "⚠ NO STOP ON EXCHANGE",
+                                 f"position {p['qty']:+g} @ {p['entry']:g}, no stop order visible",
+                                 exline=exchange_line(snap, sym, m))
                     emit(short(mode, "⚠ NO STOP ON EXCHANGE", T,
                                [f"your position {p['qty']:+g} @ {p['entry']:g} has no stop order.",
-                                f"Ticket stop: {T.p(T.sl_trigger)}  ({T.trigger.lower()} → market). Place it now."]), to=to_crit)
+                                f"Ticket stop: {T.p(T.sl_trigger)}  ({T.trigger.lower()} → market). Place it now."]
+                               + link(url)), to=to_crit)
                     st[wkey] = True; sent.append(f"NOSTOP {sym}")
             window_passed = age >= live_bars
             if m["entry_orders"] and not m["position"] and window_passed:
@@ -418,66 +456,120 @@ def cycle(params, tiers, mode: str, a) -> dict:
                             continue
                         try:
                             cancel_entry_order(params, sym, o["id"])
+                            url = report(rec, "CANCELLED (auto)",
+                                         f"order {o['id']} · {o['qty']:g} @ {o['price']:g} cancelled unfilled",
+                                         exline=exchange_line(snap, sym, m))
                             emit(short(mode, "CANCELLED (auto)", T,
                                        [f"your order {o['id']} · {o['qty']:g} @ {o['price']:g} cancelled —",
-                                        f"window of {live_bars} bars passed unfilled."]))
+                                        f"window of {live_bars} bars passed unfilled."] + link(url)))
                             st[ckey] = True; sent.append(f"CANCELLED {sym}")
                             log_line({"event": "auto_cancel", "symbol": sym, "order_id": o["id"]})
                         except Exception as e:  # noqa: BLE001
                             errors.append(f"cancel {sym} {o['id']}: {e}")
-                            emit(short(mode, "⚠ CANCEL FAILED", T, [f"order {o['id']}: {str(e)[:120]}", "Cancel it by hand."]), to=to_crit)
+                            url = report(rec, "⚠ CANCEL FAILED", f"order {o['id']}: {str(e)[:120]}")
+                            emit(short(mode, "⚠ CANCEL FAILED", T,
+                                       [f"order {o['id']}: {str(e)[:120]}", "Cancel it by hand."] + link(url)), to=to_crit)
                     else:
                         xkey = f"{key}:cancelnow:{o['id']}"
                         if not st.get(xkey):
+                            url = report(rec, "CANCEL NOW",
+                                         f"order {o['id']} still resting after the {live_bars}-bar window",
+                                         exline=exchange_line(snap, sym, m))
                             emit(short(mode, "CANCEL NOW", T,
                                        [f"your order {o['id']} · {o['qty']:g} @ {o['price']:g} is still resting",
                                         f"after the {live_bars}-bar window. Cancel it.",
-                                        "(manage.auto_cancel_expired: true lets the runner do this)"]), to=to_crit)
+                                        "(manage.auto_cancel_expired: true lets the runner do this)"]
+                                       + link(url)), to=to_crit)
                             st[xkey] = True; sent.append(f"CANCELNOW {sym}")
 
             if status == "placed" or (a.backfill and age <= a.backfill and not announced and status != "open"):
                 if not announced:
+                    url = report(rec, "SETUP", "ticket issued, nothing placed", tk["t_placed"],
+                                 status=trade_file.OPEN, exline=exchange_line(snap, sym, m))
                     emit(render(mode, "SETUP", T, snap,
-                                [f"Window: {live_bars} bars from the FVG bar (paper limit, nothing placed)", gtc_line(tk, live_bars)], m=m))
-                    st[key] = record; sent.append(f"SETUP {sym}")
+                                [f"Window: {live_bars} bars from the FVG bar (paper limit, nothing placed)",
+                                 gtc_line(tk, live_bars)] + link(url), m=m))
+                    st[key] = rec; sent.append(f"SETUP {sym}")
                 continue
 
             if status == "resting":
                 if not announced:                      # first seen mid-window (e.g. after downtime)
-                    emit(render(mode, "SETUP", T, snap, [f"Window: resting, {tk['bars_left']} bars left", gtc_line(tk, live_bars)], m=m))
-                    st[key] = record; sent.append(f"SETUP {sym}")
+                    url = report(rec, "SETUP", f"first seen mid-window, {tk['bars_left']} bars left",
+                                 tk["t_placed"], status=trade_file.OPEN, exline=exchange_line(snap, sym, m))
+                    emit(render(mode, "SETUP", T, snap,
+                                [f"Window: resting, {tk['bars_left']} bars left", gtc_line(tk, live_bars)]
+                                + link(url), m=m))
+                    st[key] = rec; sent.append(f"SETUP {sym}")
                 elif tk["bars_left"] <= 2 and not st.get(key + ":expiring"):
+                    url = report(rec, "EXPIRING", f"{tk['bars_left']} bar(s) left, unfilled",
+                                 exline=exchange_line(snap, sym, m))
                     emit(render(mode, "EXPIRING", T, snap,
-                                [f"Window: closes in {tk['bars_left']} bar(s) — cancel if unfilled", gtc_line(tk, live_bars)], m=m))
-                    st[key + ":expiring"] = True; sent.append(f"EXPIRING {sym}")
+                                [f"Window: closes in {tk['bars_left']} bar(s) — cancel if unfilled",
+                                 gtc_line(tk, live_bars)] + link(url), m=m))
+                    st[key] = rec; st[key + ":expiring"] = True; sent.append(f"EXPIRING {sym}")
                 continue
 
             if status == "open":
                 fkey = f"{sym}:fill:{tk['t_filled']}"
                 if not st.get(fkey):
+                    url = report(rec, "FILLED (paper)", f"entry touched, {tk['unreal_R']:+.2f} R at this cycle",
+                                 tk["t_filled"], exline=exchange_line(snap, sym, m))
                     emit(render(mode, "FILLED (paper)", T, snap,
                                 [f"Filled: {when(tk['t_filled'])} (paper)",
-                                 f"Unrealised: {tk['unreal_R']:+.2f} R"], m=m))
-                    st[fkey] = True; st.setdefault(key, record); sent.append(f"FILLED {sym}")
+                                 f"Unrealised: {tk['unreal_R']:+.2f} R"] + link(url), m=m))
+                    st[fkey] = True; st[key] = rec; sent.append(f"FILLED {sym}")
                 continue
 
             if status == "closed" and announced:
                 ckey = f"{sym}:closed:{tk['t_exit']}"
                 if not st.get(ckey):
                     ev = "STOPPED (paper)" if tk["outcome"] == "stop" else "TARGET HIT (paper)"
+                    how = "stop, taker fee included" if tk["outcome"] == "stop" else "pool reached"
+                    rec["outcome"] = f"{ev.split(' (')[0].title()} at {tk['net_R']:+.2f} R ({how})."
+                    url = report(rec, ev, f"{tk['net_R']:+.2f} R ({how})", tk["t_exit"],
+                                 exline=exchange_line(snap, sym, m))
                     emit(render(mode, ev, T, snap,
                                 [f"Filled: {when(tk['t_filled'])}", f"Exit: {when(tk['t_exit'])}",
-                                 f"Result: {tk['net_R']:+.2f} R  ({'stop, taker fee included' if tk['outcome']=='stop' else 'pool reached'})"], m=m))
-                    st[ckey] = True; sent.append(f"{ev.split()[0]} {sym}")
+                                 f"Result: {tk['net_R']:+.2f} R  ({how})"] + link(url), m=m))
+                    st[ckey] = True; st[key] = rec; sent.append(f"{ev.split()[0]} {sym}")
                 continue
 
             if status == "expired" and announced:
                 xkey = f"{sym}:expired:{tk['t_expired']}"
                 if not st.get(xkey):
+                    rec["outcome"] = f"No fill within the {live_bars}-bar window."
+                    url = report(rec, "WINDOW EXPIRED", f"no fill within {live_bars} bars of the FVG bar",
+                                 tk["t_expired"], exline=exchange_line(snap, sym, m))
                     emit(render(mode, "WINDOW EXPIRED · CANCEL", T, snap,
-                                [f"Window: no fill within {live_bars} bars of the FVG bar — cancel the limit", gtc_line(tk, live_bars)], m=m))
-                    st[xkey] = True; sent.append(f"EXPIRED {sym}")
+                                [f"Window: no fill within {live_bars} bars of the FVG bar — cancel the limit",
+                                 gtc_line(tk, live_bars)] + link(url), m=m))
+                    st[xkey] = True; st[key] = rec; sent.append(f"EXPIRED {sym}")
                 continue
+
+    # ---- close off the trade files whose 32-bar window has passed ----------------
+    # Ed's rule: at the 32nd bar the report is complete. Whatever happened inside the window
+    # is already in it; from here it is a closed record — Traded if anything of his reached
+    # the exchange, Paper if not — and the place to paste the permanent chart snapshot.
+    if drive_on:
+        now_ms = int(time.time() * 1000)
+        for k2, r2 in list(st.items()):
+            if not isinstance(r2, dict) or not r2.get("report_id") or ":" not in str(k2):
+                continue
+            if r2.get("status", trade_file.OPEN) != trade_file.OPEN or now_ms < int(r2.get("expires", 0) or 0):
+                continue
+            done = trade_file.CLOSED_TRADED if r2.get("traded") else trade_file.CLOSED_PAPER
+            tail = ("An order of yours reached the exchange." if r2.get("traded")
+                    else "Nothing of yours reached the exchange — paper record only.")
+            url = report(r2, "WINDOW CLOSED", f"{live_bars} bars from the FVG bar",
+                         int(r2["expires"]), status=done,
+                         outcome=f"{r2.get('outcome', '')} {tail}".strip())
+            pos = "SHORT" if str(r2.get("side")) == "SELL" else "LONG"
+            emit("\n".join([when(int(r2["expires"])), f"{mode} · REPORT CLOSED · {TS} · 15m", "",
+                             f"{r2['sym']} · {pos}", done,
+                             r2.get("outcome", "") or "No outcome recorded inside the window."]
+                            + link(url)
+                            + ["Paste the permanent TradingView snapshot into the Chart section."]))
+            st[k2] = r2; sent.append(f"CLOSED {r2['sym']}")
 
     # heartbeat to syslog
     now = time.time()
@@ -503,6 +595,7 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", default=None, help="override the universe for this run (comma list)")
     ap.add_argument("--stdout", action="store_true", help="print messages instead of sending")
     ap.add_argument("--backfill", type=int, default=0, help="also report setups placed in the last N bars")
+    ap.add_argument("--no-report", action="store_true", help="skip the Google Doc trade files this run")
     ap.add_argument("--test", action="store_true", help="send one test line to the strategy's topic and exit")
     a = ap.parse_args(argv)
 

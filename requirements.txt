@@ -5,3 +5,8 @@ pytest>=8
 # pandas>=2
 # numpy>=1.26
 tzdata ; sys_platform == "win32"   # zoneinfo has no tz database on Windows; bin/study-hours falls back to the EU rule without it
+google-api-python-client>=2.100   # Drive: per-setup trade reports as Google Docs
+google-auth-oauthlib>=1.2
+# chart capture on the server (common/charts/tvshot.py); after installing:
+#   python -m playwright install chromium
+playwright
