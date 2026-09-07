@@ -95,6 +95,16 @@ def test_unrelated_updates_ignored(monkeypatch, tmp_path):
     assert calls == []
 
 
+def test_owner_id_accepts_ownerid_key(monkeypatch, tmp_path):
+    (tmp_path / "trading.env").write_text("TELEGRAM_TO_DIGEST=-100_56\nOwnerID=123456789\n", encoding="utf-8")
+    (tmp_path / "rickyassist_bot.env").write_text("TELEGRAM_BOT_TOKEN=1:x\n", encoding="utf-8")
+    monkeypatch.setattr(approvals.telegram, "CONFIG_DIR", tmp_path)
+    class B: name, book = "rickyassist_bot", "trading"
+    assert approvals.owner_id(B()) == "123456789"
+    (tmp_path / "trading.env").write_text("TELEGRAM_TO_DIGEST=-100_56\n", encoding="utf-8")
+    assert approvals.owner_id(B()) is None
+
+
 # ---- the Sunday folder --------------------------------------------------------------------------
 def test_week_folder_name():
     assert wf.week_folder_name(dt.date(2026, 9, 6)) == "2026-09-06 W36"     # a Sunday maps to itself

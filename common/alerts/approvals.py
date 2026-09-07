@@ -16,7 +16,8 @@ When no webhook is set on the bot (a test bot, or the webhook is down), `python 
 common.alerts.approvals --poll` long-polls getUpdates and handles the same updates itself.
 Telegram refuses getUpdates while a webhook exists, so the two never compete.
 
-Authorisation: TELEGRAM_OWNER_ID in the address book (.config\telegram\trading.env). A press or
+Authorisation: the owner id in the telegram env files (.config\telegram\trading.env or the bot file) under
+TELEGRAM_OWNER_ID / OWNER_ID / OwnerID (any case). A press or
 reply from anyone else is acknowledged with a toast and ignored. Nothing here changes params.yaml
 or the spec; the only write is what `weekly --apply` does, and that refuses an expired proposal or
 a params hash that no longer matches.
@@ -59,10 +60,23 @@ def run_weekly(ts: str, args: list[str], repo: Path, timeout: int = 1800) -> tup
     return r.returncode, out or r.stderr.strip()[-300:]
 
 
+OWNER_KEYS = ("telegram_owner_id", "owner_id", "ownerid", "telegram_owner", "owner")
+
+
 def owner_id(bot: telegram.Bot) -> str | None:
-    env = telegram._read_env(telegram.CONFIG_DIR / f"{bot.book}.env") if bot.book else {}
-    env.update(telegram._read_env(telegram.CONFIG_DIR / f"{bot.name}.env"))
-    return env.get("TELEGRAM_OWNER_ID") or os.environ.get("TELEGRAM_OWNER_ID")
+    """Ed's numeric Telegram user id, from the address book or the bot file. Accepts the key under any of
+    OWNER_KEYS, case-insensitively — Ed keeps it as `OwnerID=` in the telegram env (added for exactly this)."""
+    env = {}
+    for name in ([bot.book] if bot.book else []) + [bot.name]:
+        try:
+            env.update(telegram._read_env(telegram.CONFIG_DIR / f"{name}.env"))
+        except telegram.TelegramError:
+            pass
+    env.update({k: v for k, v in os.environ.items() if k.lower() in OWNER_KEYS})
+    for k, v in env.items():
+        if k.lower() in OWNER_KEYS and v.strip().isdigit():
+            return v.strip()
+    return None
 
 
 def _find_id_in_text(text: str) -> tuple[str | None, str | None]:

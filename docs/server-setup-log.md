@@ -49,7 +49,9 @@ secrets-sync), Session, General.
 
 The `trading` address book (Bitwarden → `.config\telegram\trading.env`):
 `TELEGRAM_TO_TRADING=-1003939412847_4`, `_ALERTS=…_54`, `_DIGEST=…_56`,
-`_APPROVALS=…_6`, `_SYSLOG=-1003992348394_11`, `_ACTIVITY_LOG=…_13`.
+`_APPROVALS=…_6`, `_SYSLOG=-1003992348394_11`, `_ACTIVITY_LOG=…_13`, plus
+`OwnerID=<Ed's numeric Telegram user id>` — the Approvals buttons (Apply / Hold /
+Re-run, v1.30+) act only for that id.
 
 Rules: if a message expires harmlessly it goes to Logs; if it would matter in a
 month it goes to the Investments group. Per-cycle activity goes to a local JSONL
