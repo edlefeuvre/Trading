@@ -77,7 +77,7 @@ def render_index(day: dt.date, filed: Filed, decisions: list[str], open_items: l
     """Markdown for `00 - … index`. Bulleted label lines only (Drive renders pipe tables badly)."""
     s = sunday_of(day)
     title = week_folder_name(day, pattern)
-    lines = [f"# Sunday review — {s:%-d %B %Y} ({title.split()[-1]})", "",
+    lines = [f"# Sunday review — {s.day} {s:%B %Y} ({title.split()[-1]})", "",
              "One folder per Sunday. Everything examined at the review sits here, numbered in the order to read it.", "",
              "## In this folder", ""]
     seen = set()

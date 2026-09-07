@@ -170,7 +170,7 @@ def render_summary(rows, changes, meta, min_n, status: str, holdings: list[str],
     now = meta["now"]
     funded = [r for r in rows if r["tier_proposed"] > 0]
     f12 = sum(r["n_12m"] for r in funded)
-    L = [f"# {TS} CHoCH ICT 15m (v{meta['spec_version']}) — Weekly R-factor review, {now:%a %-d %b %Y}", "",
+    L = [f"# {TS} CHoCH ICT 15m (v{meta['spec_version']}) — Weekly R-factor review, {now:%a} {now.day} {now:%b %Y}", "",
          f"- **Run:** PAPER · WEEKLY · {TS}, {now:%a %d %b %Y %H:%M UTC}, engine k={meta['k']}, "
          f"12-month cutoff {now - dt.timedelta(days=365):%d %b %Y}", "",
          f"- **Book:** ${meta['book']:,.0f} → ceiling ${meta['cap']:,.2f} per trade "
