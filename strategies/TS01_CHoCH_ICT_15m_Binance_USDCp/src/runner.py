@@ -360,8 +360,9 @@ def cycle(params, tiers, mode: str, a) -> dict:
     errors: list[str] = []
     watch = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else [s for s, t in tiers.items() if t > 0]
     st = load_state()
-    book = trade_file.load_book()
-    drive_on = (bool((book.get("drive", {}) or {}).get("enabled", False))
+    book_cfg = trade_file.load_book()          # config/book.yaml — NOT `book`, which is the
+    #                                            Telegram address book name from alerts.book
+    drive_on = (bool((book_cfg.get("drive", {}) or {}).get("enabled", False))
                 and not getattr(a, "stdout", False) and not getattr(a, "no_report", False))
     snap = exchange_snapshot(params)
     filters = data.symbol_filters()
@@ -374,7 +375,7 @@ def cycle(params, tiers, mode: str, a) -> dict:
         """Append one lifecycle row to this setup's Doc and return its link. Fail-soft."""
         if not drive_on:
             return None
-        url = trade_file.sync(book, rec, event, detail,
+        url = trade_file.sync(book_cfg, rec, event, detail,
                               when(when_ms if when_ms else int(time.time() * 1000)),
                               status=status, outcome=outcome, exchange_line=exline,
                               mode=mode.capitalize())

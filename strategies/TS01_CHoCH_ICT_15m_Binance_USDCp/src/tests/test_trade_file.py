@@ -135,6 +135,18 @@ def test_a_position_of_eds_closes_the_file_as_traded(env, calls):
     assert [t for _, t in env["sent"] if "REPORT CLOSED" in t and "CLOSED (Traded)" in t]
 
 
+def test_telegram_still_gets_the_address_book_name_not_the_book_config(env, calls):
+    """Regression, v1.25: `book` (the Telegram address book, a name) was shadowed by
+    config/book.yaml, so every send failed with a credentials path built from a dict."""
+    _drive_on(env, calls)
+    seen = []
+    env["mp"].setattr(runner.telegram, "send",
+                      lambda text, to=None, book=None, **kw: seen.append((to, book)))
+    _run(env, None)
+    assert seen, "nothing was sent"
+    assert all(isinstance(b, str) and b for _, b in seen), seen
+
+
 def test_stdout_runs_do_not_write_to_drive(env, calls):
     _drive_on(env, calls)
     env["mp"].setattr(runner, "exchange_snapshot", lambda params: None)

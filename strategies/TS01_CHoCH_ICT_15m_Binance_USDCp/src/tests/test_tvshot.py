@@ -54,3 +54,20 @@ def test_captures_the_chart_pane_and_reports_the_selector(tmp_path, monkeypatch)
         pytest.skip(f"no browser available here: {e}")
     assert Path(r["png"]).is_file() and r["size"] == (900, 500)
     assert "layout__area--center" in r["element"] and not r["warnings"]
+
+
+def test_browser_resolution_and_channel_marker(tmp_path, monkeypatch):
+    """--login records which browser owns the profile; capture drives that same one."""
+    assert tvshot.channel_of("edge") == "msedge" and tvshot.channel_of("chromium") is None
+    monkeypatch.setattr(tvshot, "PROFILE_DIR", tmp_path / "profile")
+    assert tvshot.stored_channel() is None                     # nothing recorded yet
+    (tmp_path / tvshot.CHANNEL_MARKER).write_text("edge", encoding="utf-8")
+    assert tvshot.stored_channel() == "msedge"
+    (tmp_path / tvshot.CHANNEL_MARKER).write_text("nonsense", encoding="utf-8")
+    assert tvshot.stored_channel() is None                     # unknown name, not a crash
+
+
+def test_browser_binary_is_none_for_what_is_not_installed(monkeypatch):
+    monkeypatch.setattr(tvshot.shutil, "which", lambda *a, **k: None)
+    monkeypatch.setitem(tvshot.BROWSERS, "edge", ("msedge", ["/nowhere/msedge.exe"]))
+    assert tvshot.browser_binary("edge") is None

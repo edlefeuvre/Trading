@@ -1,0 +1,184 @@
+r"""Compare what the old watcher announced against what TS01 announced. Read-only.
+
+Both systems dedupe through a state file keyed `SYMBOL:<fvg bar ms>` — TS01 inherited the
+format from choch_watch.py — so their announced setups can be compared exactly instead of
+by reading Telegram. Nothing here is sent, detected or written; it reads two JSON files.
+
+    python bin/parallel-check                 # last 7 days
+    python bin/parallel-check --days 14
+    python bin/parallel-check --send          # also post the summary to the syslog topic
+
+Read this before trusting a mismatch:
+
+  * TS01's state file was SEEDED from the watcher's on first run, so that setups the
+    watcher had already announced were not announced twice. Those inherited keys are
+    indistinguishable from agreement, so every setup whose FVG bar predates TS01's first
+    cycle is excluded and counted separately as "inherited". The cutoff is read from the
+    first line of logs/TS01-runner.jsonl, or given with --after.
+  * The watcher scans all 21 SYMBOLS; TS01 scans only the FUNDED ones (tier > 0 in
+    universe.yaml). A setup the watcher found on an unfunded symbol is NOT a divergence
+    and is reported separately.
+  * The two agree on detection or they do not. Lifecycle wording differs by design — the
+    watcher only ever says SETUP and IN TRADE.
+  * Silence in one is only meaningful if that system was running. Neither state file
+    records downtime, so check the task history alongside a run of gaps.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import re
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+STRAT = REPO / "strategies" / "TS01_CHoCH_ICT_15m_Binance_USDCp"
+WATCHER = Path.home() / ".choch-watch" / "state.json"
+TS01 = STRAT / "results" / "state.json"
+KEY = re.compile(r"^([A-Z0-9]{3,15}):(\d{10,16})$")     # SYMBOL:ms — subkeys have a middle part
+TZ = dt.timezone.utc
+
+
+def setups(path: Path) -> dict[tuple[str, int], None]:
+    """The announced setups in a state file: {(symbol, fvg_bar_ms)}. Ignores every
+    lifecycle subkey (`:fill:`, `:closed:`, `:nostop:` …) and bookkeeping entries."""
+    if not path.is_file():
+        return {}
+    try:
+        st = json.load(open(path, encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        print(f"warning: {path} unreadable — {e}", file=sys.stderr)
+        return {}
+    out = {}
+    for k in st:
+        m = KEY.match(str(k))
+        if m:
+            out[(m.group(1), int(m.group(2)))] = None
+    return out
+
+
+def funded() -> dict[str, float]:
+    try:
+        import yaml  # type: ignore
+        u = yaml.safe_load(open(STRAT / "config" / "universe.yaml", encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    t = {}
+    for row in u.get("symbols", []):
+        if isinstance(row, dict):
+            t[str(row["symbol"]).upper()] = float(row.get("tier", 0) or 0)
+        else:
+            t[str(row).upper()] = 1.0
+    return t
+
+
+def first_cycle_ms() -> int | None:
+    """When TS01 first ran, from the head of its own log. Setups older than this are in its
+    state only because they were inherited from the watcher — not because it saw them."""
+    p = STRAT / "logs" / "TS01-runner.jsonl"
+    if not p.is_file():
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                ts = json.loads(line).get("ts")
+                if ts:
+                    return int(dt.datetime.fromisoformat(ts).timestamp() * 1000)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def when(ms: int) -> str:
+    return dt.datetime.fromtimestamp(ms / 1000, TZ).strftime("%a %d %b %H:%M UTC")
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--days", type=float, default=7)
+    ap.add_argument("--send", action="store_true", help="post the summary to the syslog topic")
+    ap.add_argument("--watcher-state", default=str(WATCHER))
+    ap.add_argument("--after", default=None, metavar="ISO",
+                    help="ignore setups before this instant (default: TS01's first logged cycle)")
+    ap.add_argument("--include-inherited", action="store_true",
+                    help="count the seeded keys as agreement — they are not evidence; for inspection only")
+    a = ap.parse_args(argv)
+
+    cutoff = int((dt.datetime.now(TZ) - dt.timedelta(days=a.days)).timestamp() * 1000)
+    w_all = {k for k in setups(Path(a.watcher_state)) if k[1] >= cutoff}
+    t_all = {k for k in setups(TS01) if k[1] >= cutoff}
+    tiers = funded()
+
+    # Setups older than TS01's first cycle are in its state by inheritance, not detection.
+    seeded = "_seeded_from" in (json.load(open(TS01, encoding="utf-8")) if TS01.is_file() else {})
+    if a.after:
+        started = int(dt.datetime.fromisoformat(a.after).replace(tzinfo=TZ).timestamp() * 1000)
+    else:
+        started = first_cycle_ms() or 0
+    if a.include_inherited:
+        started = 0
+    inherited = sorted([k for k in t_all if k[1] < started], key=lambda k: k[1])
+    w = {k for k in w_all if k[1] >= started}
+    t = {k for k in t_all if k[1] >= started}
+
+    both = sorted(w & t, key=lambda k: k[1])
+    w_only = sorted(w - t, key=lambda k: k[1])
+    t_only = sorted(t - w, key=lambda k: k[1])
+    # A watcher setup on a symbol TS01 does not fund is expected, not a divergence.
+    unfunded = [k for k in w_only if tiers.get(k[0], 0) <= 0]
+    w_only = [k for k in w_only if tiers.get(k[0], 0) > 0]
+
+    L = [f"parallel-check · last {a.days:g} days · watcher vs TS01 (announced setups)"]
+    if started:
+        L.append(f"  comparing setups from {when(started)} onward"
+                 + ("  (TS01's first logged cycle)" if not a.after else "  (--after)"))
+        if inherited:
+            L.append(f"  excluded {len(inherited)} inherited setup(s) — seeded from the watcher's "
+                     f"state, so agreement on them is not evidence")
+    elif a.include_inherited:
+        L.append("  inherited keys INCLUDED at your request — the agreement below is not evidence "
+                 "of independent detection.")
+    elif seeded:
+        L.append("  WARNING: TS01's state was seeded from the watcher's and no cutoff could be "
+                 "determined (no runner log?), so 'both agree' below may be inheritance, not "
+                 "detection. Pass --after with the date TS01 started.")
+    L += [
+         f"  both agree:        {len(both)}",
+         f"  watcher only:      {len(w_only)}   <- funded symbols; these need explaining",
+         f"  TS01 only:         {len(t_only)}",
+         f"  watcher, unfunded: {len(unfunded)}  (expected: TS01 scans funded symbols only)"]
+    if started and not both and not w_only and not t_only:
+        L.append("\nNothing on either side since the cutoff — too early to conclude anything.")
+    for label, rows in (("watcher only", w_only), ("TS01 only", t_only)):
+        if rows:
+            L.append(f"\n-- {label} --")
+            L += [f"   {sym:<10} {when(ms)}" for sym, ms in rows[:40]]
+            if len(rows) > 40:
+                L.append(f"   … and {len(rows) - 40} more")
+    if not w_only and not t_only:
+        L.append("\nNo divergence on funded symbols. Both systems announced the same setups.")
+    if t and not w:
+        L.append("\nNOTE: the watcher's state file has nothing in this window — check it is still running.")
+    text = "\n".join(L)
+    print(text)
+    print("\nNothing was sent to the exchange and no state was written.")
+    if a.send:
+        try:
+            from common.alerts import telegram
+            from common.reports.trade_file import load_book
+            book = load_book()
+            al = book.get("alerts", {}) or {}
+            telegram.send("PAPER · PARALLEL CHECK · TS01\n" + text,
+                          to=al.get("syslog_to", "syslog"), book=al.get("book", "trading"))
+            print("summary sent")
+        except Exception as e:  # noqa: BLE001
+            print(f"send failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
