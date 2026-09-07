@@ -35,7 +35,7 @@ META = dict(now=NOW, k=5, book=356.0, cap=20.0, spec_version="1.25", params_hash
 
 
 def git(repo, *args):
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
 
 
 @pytest.fixture

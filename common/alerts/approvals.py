@@ -32,6 +32,9 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):            # Windows consoles default to cp1252; the reviews carry → — ·
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from common.alerts import telegram
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -51,7 +54,7 @@ def run_weekly(ts: str, args: list[str], repo: Path, timeout: int = 1800) -> tup
     if not mod:
         return 2, f"no strategy folder for {ts}"
     cmd = [sys.executable, "-m", mod, *args]
-    r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     out = (r.stdout.strip().splitlines() or [""])[-1]
     return r.returncode, out or r.stderr.strip()[-300:]
 

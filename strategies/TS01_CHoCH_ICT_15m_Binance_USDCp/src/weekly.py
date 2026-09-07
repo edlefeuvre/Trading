@@ -35,6 +35,9 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):            # Windows consoles default to cp1252; the reviews carry → — ·
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from common.alerts import telegram
 from common.data import binance_klines as data
 from common.engine import ict_base as engine
@@ -319,7 +322,7 @@ def run_study() -> list[str]:
     cmd = [sys.executable, str(REPO / "bin" / "study-hours"), "--strategy", HERE.name,
            "--html", str(HERE / "results" / "study-hours.html"), "--csv", str(HERE / "results" / "tranche-setups.csv")]
     try:
-        r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, timeout=1800)
+        r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
         if r.returncode != 0:
             warns.append(f"study-hours failed: {(r.stderr or r.stdout).strip()[-200:]}")
     except Exception as e:  # noqa: BLE001
@@ -434,7 +437,7 @@ def rewrite_universe(path: Path, changes: list[dict], today: str) -> Path:
 
 
 def git(*args, check=True) -> str:
-    r = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True)
+    r = subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout.strip()

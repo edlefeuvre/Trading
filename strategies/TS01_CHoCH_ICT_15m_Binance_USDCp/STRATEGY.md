@@ -2,7 +2,7 @@
 id: TS01
 name: TS01 CHoCH ICT 15m Binance USDCp
 slug: TS01_CHoCH_ICT_15m_Binance_USDCp
-version: 1.31
+version: 1.32
 status: paper            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -576,6 +576,7 @@ exchange code adds a row. The hook checks that this table changed.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-07 | 1.32 | §6 | **Fix: UTF-8 on Windows.** `subprocess` text mode decoded git and study output with the console code page (cp1252), turning `→` and `—` in commit subjects into mojibake; every subprocess call in the weekly, the approvals handler and their tests now decodes UTF-8, and both CLIs set stdout to UTF-8. Found by the v1.31 test run on the PC (1 failure). | `src/weekly.py`, `common/alerts/approvals.py`, `src/tests/test_weekly_apply.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.31 | §6 | **Fix: v1.30 could not render the review on Windows.** Two date formats used `%-d` (glibc's no-padding flag), which Windows' C runtime rejects with `Invalid format string`; 8 tests failed on the PC while passing on Linux. Day now formatted with `.day`. Nothing else changed. | `src/weekly.py`, `common/reports/weekly_folder.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.30 | §3, §6, §8a | The Sunday programme files its review into one Google Drive folder per Sunday (`Trading/Weeklies/yyyy-mm-dd Wnn/`, summary first, detail below, Google Doc copy for the phone, study HTML, paper-track register and the new per-setup tranche list, generated index) and asks for the decision with an Apply / Hold / Re-run keyboard in Approvals; `weekly --apply --proposal <id>` rewrites `universe.yaml` all-or-nothing, adds the change-log row and commits — the button is the commit. Proposal record with id, expiry and params hash; `--hold`, `--run-now`, `--status`. `common/drive/files.py` (folders and plain files on the existing `drive.file` token), `common/reports/weekly_folder.py`, `common/alerts/approvals.py`; Telegram sender gains inline keyboards, `edit`, `answer_callback`; `bin/study-hours --csv`. No OneDrive copy (Ed, 6 Sep). Tests on a throwaway git repo. | `src/weekly.py`, `common/drive/files.py`, `common/reports/weekly_folder.py`, `common/alerts/approvals.py`, `common/alerts/telegram.py`, `bin/study-hours`, `config/params.yaml`, `config/book.yaml`, `results/sunday-open-items.yaml`, `src/tests/test_weekly_apply.py`, `src/tests/test_approvals.py`, `STRATEGY.md` |
 | 2026-09-07 | 1.29 | §6, §7 | **Fix: the parallel-run baseline was measuring inheritance, not agreement.** TS01's `state.json` was seeded from the watcher's on first run (so nothing would be announced twice), and those inherited keys are shape-identical to independent agreement — the first `parallel-check` run reported 18 agreements and, tellingly, zero setups on the six symbols TS01 does not fund, which is what inheritance looks like. Setups whose FVG bar predates TS01's first logged cycle are now excluded and counted as inherited; `--after` sets the cutoff by hand and `--include-inherited` re-includes them while printing that the result is not evidence. | `bin/parallel-check`, `src/tests/test_parallel_check.py`, `STRATEGY.md` |
