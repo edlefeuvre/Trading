@@ -1,0 +1,11 @@
+[Unit]
+Description=TS04 — Sunday programme: roll data, re-run engine, R factors for review
+
+[Service]
+Type=oneshot
+User=trader
+Group=trader
+WorkingDirectory={{REPO}}
+EnvironmentFile=/etc/trading/TS04.env
+ExecStart={{REPO}}/.venv/bin/python -m strategies.TS04_Breakout_Qulla_1D_Binance_USDCp.src.weekly
+SyslogIdentifier=TS04-weekly

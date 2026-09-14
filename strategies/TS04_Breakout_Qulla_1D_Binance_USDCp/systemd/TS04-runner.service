@@ -1,0 +1,26 @@
+[Unit]
+Description=TS04 Breakout_Qulla Binance USDCp — runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory={{REPO}}
+EnvironmentFile=/etc/trading/TS04.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{REPO}}/.venv/bin/python -m strategies.TS04_Breakout_Qulla_1D_Binance_USDCp.src.runner
+Restart=on-failure
+RestartSec=15
+# hard stop: if the runner keeps dying, don't flap forever
+StartLimitIntervalSec=600
+StartLimitBurst=5
+SyslogIdentifier=TS04
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{REPO}}/strategies/TS04_Breakout_Qulla_1D_Binance_USDCp/logs {{REPO}}/strategies/TS04_Breakout_Qulla_1D_Binance_USDCp/results {{REPO}}/common/data/cache
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

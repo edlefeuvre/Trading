@@ -1,0 +1,38 @@
+# TS04 Breakout_Qulla Binance USDCp — parameters
+# Every key here MUST appear in STRATEGY.md §3 with the same value.
+# `make check` enforces it. Keys under `meta:` are exempt.
+meta:
+  slug: TS04_Breakout_Qulla_1D_Binance_USDCp
+  version: "0.1"
+
+mode: PAPER            # PAPER | SHADOW | LIVE  (LIVE also needs live_approved in STRATEGY.md)
+
+credentials:
+  exchange: binance/futures-trade
+  telegram: telegram/rickyassist_bot
+timeframe: 1D
+risk_unit_usd: 20
+
+alerts:
+  book: trading
+  to: trading
+  critical_to: alerts
+  weekly_to: digest
+
+filter:
+  ma_fast: 10
+  ma_slow: 20
+setup:
+  prior_move_pct: 30
+  prior_move_bars_min: 20
+  prior_move_bars_max: 60
+  base_bars_min: 10
+  base_bars_max: 40
+  base_range_pct: 25
+stop:
+  adr_cap: 1.0
+  adr_bars: 20
+exit:
+  partial_r: 2.0
+  partial_bars: 5
+  trail_ma: 10

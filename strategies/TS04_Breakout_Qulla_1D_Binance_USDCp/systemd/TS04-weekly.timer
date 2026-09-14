@@ -1,0 +1,11 @@
+[Unit]
+Description=TS04 — Sunday programme (STRATEGY.md §8a) before the Sunday pass
+
+[Timer]
+# Sunday 06:00 UTC (08:00 Gibraltar in summer)
+OnCalendar=Sun *-*-* 06:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

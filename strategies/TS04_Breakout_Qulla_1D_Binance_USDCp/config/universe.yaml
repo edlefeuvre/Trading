@@ -1,0 +1,10 @@
+# TS04 — tested universe. Adding a symbol is a MAJOR change: it has not been
+# through the engine until results/ says it has. The other 18 TS01 symbols are a
+# declared secondary look (STRATEGY.md §10 item 4), not part of this list.
+platform: Binance
+product: USDCp
+dataset_start: 2020-01
+symbols:
+  - {symbol: BTCUSDC, tier: 1.0, why: primary — also the market-filter instrument}
+  - {symbol: ETHUSDC, tier: 1.0, why: primary}
+  - {symbol: SOLUSDC, tier: 1.0, why: primary}
