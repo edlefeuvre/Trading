@@ -2,7 +2,7 @@
 id: TS04
 name: TS04 Breakout Qulla 1D Binance USDCp
 slug: TS04_Breakout_Qulla_1D_Binance_USDCp
-version: 0.1
+version: 0.2
 status: draft            # draft | backtesting | paper | shadow | live | retired
 mode: PAPER              # must match config/params.yaml
 live_approved:           # date, set by Ed only, must also appear in the change log
@@ -154,7 +154,8 @@ watch), `ENTRY`, `PARTIAL`, `STOP_TO_BE`, `TRAIL_EXIT`, `STOP_HIT`.
 | `config/universe.yaml` | symbol list | 0.1 | BTC, ETH, SOL |
 | `pine/…` | TradingView scripts | | none yet; millerrh V2 is prior art, not an artefact |
 | `src/runner.py` | live/paper runner | 0.1 | template |
-| `src/backtest.py` | backtest entry point | 0.1 | template |
+| `src/backtest.py` | backtest engine | 0.1 | §2 on daily bars; archive klines + funding; `--trail`, `--base` for the declared secondaries |
+| `results/2026-09-15-primary.json` | primary run | | trades, params, version |
 | `src/weekly.py` | Sunday programme | 0.1 | template |
 | `src/tests/test_replay.py` | acceptance | 0.1 | template |
 | `systemd/TS04-runner.service` | long-running runner | 0.1 | |
@@ -188,7 +189,44 @@ watch), `ENTRY`, `PARTIAL`, `STOP_TO_BE`, `TRAIL_EXIT`, `STOP_HIT`.
 
 ## 9. Evidence (backtests & paper results)
 
-None. Variants tried so far: **0**.
+Variants tried so far: **3** (primary + the two declared secondaries).
+
+### 2026-09-15 — primary run (§10 item 1) and declared secondaries (items 2, 3)
+
+`src/backtest.py` v0.1. USDT-perp daily bars 2020-01 → 2026-09-14 (USDC perps
+list Jan 2024; the two books track to bps, per the Aug 2026 venue test). Real
+funding, taker 0.0397%, slip 0.02%, maker 0. IS to 2023-12, OOS 2024-01 on.
+Result file `results/2026-09-15-primary.json`.
+
+| Run | n | R/trade | t | win | ΣR | OOS R/trade (n) | median hold | rejected by ADR cap |
+|---|---|---|---|---|---|---|---|---|
+| Primary (trail 10, base 10–40) | 60 | +0.29 | 0.60 | 33% | +17.5 | −0.29 (25) | 3 d | 122 |
+| Trail 20 | 56 | +0.32 | 0.70 | 36% | +17.6 | −0.21 (23) | 4 d | 121 |
+| Base 14–56 | 46 | −0.12 | −0.54 | 35% | −5.6 | −0.15 (21) | 3 d | 104 |
+
+Per symbol, primary: BTC −0.13R (n 18), ETH −0.07R (n 25), SOL +1.27R (n 17).
+
+Reading:
+
+1. **One trade is the result.** SOL 10 Aug 2021, +26.7R, held 34 days. Without
+   it: n 59, −0.16R/trade, t −0.77. OOS is negative in all three runs.
+2. **The stop does not transfer.** Breakout-bar low, capped at 1×ADR, stops out
+   47 of 60 trades in a median of 3 days; the trail engaged 13 times. His
+   "low of day" stop is tight relative to equity daily ranges; crypto daily
+   ranges (median ADR 5.9%) chew through it before the trend can show.
+3. **The ADR cap is doing most of the selecting.** 122 of 182 qualifying
+   breakouts were rejected (median stop 8.0%). What survives is the quiet
+   breakout, which is also the one least likely to run.
+4. Funding cost 0.07R/trade — small only because the holds are short.
+5. Lands where §1 said it would: a trend-continuation entry whose return in
+   crypto majors is the asset's, not the setup's (B&H over the window: BTC
+   +986%, ETH +1,825%, SOL +3,039%).
+
+Status stays **draft**. Items 4 and 5 of §10 not yet run. The one structural
+observation worth a new pre-registered hypothesis (not a tune): a stop at the
+base low rather than the breakout-bar low changes the trade's shape from
+"tight stop, rare tail" to "wide stop, fewer R per winner" — a different trade,
+to be declared as such before running.
 
 Prior art (not evidence): millerrh, "Qullamaggie Breakout V2", TradingView
 open-source Pine; Substack "I tested Minervini's & Qullamaggie's strategy on
@@ -221,4 +259,5 @@ Write the question and the expected answer **before** running.
 
 | Date | Version | Section | Change | Files |
 |---|---|---|---|---|
+| 2026-09-15 | 0.2 | §6, §9 | Backtest engine written; primary and two declared secondaries run and recorded. No spec change. | `src/backtest.py`, `results/2026-09-15-primary.json`, `STRATEGY.md` |
 | 2026-09-14 | 0.1 | all | Created from template; §1–§4, §7 notes, §9 prior art, §10 pre-registration written before any test | `STRATEGY.md`, `config/universe.yaml`, `config/params.yaml` |
